@@ -23,6 +23,7 @@ CMD_READ_DATA = bytearray([0x03, 0x00, 0x11])
 DATA_LENGTH = 30 # Expected response size in bytes
 
 class APM10:
+    __slots__ = ("i2c", "address")
     def __init__(self, i2c, address=I2C_DEFAULT_ADDRESS):
         """
         Initialize the APM10 driver.
@@ -146,3 +147,4 @@ class APM10:
                     crc <<= 1
                 crc &= 0xFF  # Ensure CRC remains 8-bit
         return crc
+
