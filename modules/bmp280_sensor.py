@@ -1,13 +1,13 @@
 # BMP280 sensor driver
 
 
-from bmp280 import *
+import bmp280
 import config
 
 class BMP280Driver:
     __slots__ = ("sensor",)
     
-    def __init__(self, i2c, i2c_address=0x76, use_case=BMP280_CASE_WEATHER):
+    def __init__(self, i2c, i2c_address=0x76, use_case=bmp280.BMP280_CASE_WEATHER):
         """
         Initializes the BMP280 sensor.
 
@@ -25,7 +25,7 @@ class BMP280Driver:
         #BMP280_CASE_INDOOR
         """
         try:            
-            self.sensor = BMP280(i2c, addr=i2c_address, use_case=use_case)
+            self.sensor = bmp280.BMP280(i2c, addr=i2c_address, use_case=use_case)
             if config.debug:
                 print('bmp280 initialized')
         except Exception as e:
@@ -51,3 +51,4 @@ class BMP280Driver:
         except Exception as e:
             if config.debug:
                 print("Error resetting the sensor: ", e)
+
