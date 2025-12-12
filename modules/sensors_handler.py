@@ -1,7 +1,5 @@
 # sensor manager class to handle all sensors
 
-from bmp280_sensor import *
-
 class Sensors:
     __slots__ = ("aht25", "bmp280", "ds18b20", "sht40", "apm")
      
@@ -28,6 +26,7 @@ class Sensors:
             except:
                 self.aht25 = None
             try:
+                from bm280_sensor import BMP280Driver
                 self.bmp280 = BMP280Driver(i2c, i2c_address=0x76, use_case=BMP280_CASE_WEATHER)
             except:
                 self.bmp280 = None
@@ -98,4 +97,5 @@ if __name__ == "__main__":
     except Exception as e:
         print('Error occured: ', e)
        
+
        
