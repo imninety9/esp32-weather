@@ -164,8 +164,10 @@ class SDLogger:
             # Optionally: mark a flag so the rest of the code stops trying to log
             self.data_path = None
             
-    def append_row(self, vals, ts): # vals is a list of 'strings' to be appended and ts is the timestamp tuple
+    def append_row(self, vals, ts): #  to be appended and ts is the timestamp tuple
         """
+        vals: a list of ordered values (values are a str object)
+        ts: rtc timestamp tuple.
         Append a CSV row to the data log.
         Performs daily rotation check before writing. If file is new,
         header will be written.
@@ -174,12 +176,10 @@ class SDLogger:
             return
         
         # rotate first (cheap)
-        try:
-            self.rotate_data_if_needed(ts)
-        except Exception:
-            pass
+        self.rotate_data_if_needed(ts)
         
-        row = ','.join(vals) + '\n'
+        _join = ",".join
+        row = _join(vals) + "\n"
         try:
             if self.debug:
                 print(row)
