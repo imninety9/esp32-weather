@@ -12,7 +12,7 @@ class SDLogger:
                  "data_path", "error_path", "health_path",
                  "error_row_limit", "error_retention", "error_avg_row_len",
                  "_current_date", "_error_row_count",
-                 "_last_error_times")
+                 "_last_error_times", "_rows_since_flush")
     
     def __init__(self, spi_pin_miso, spi_pin_mosi, spi_pin_sck, spi_pin_cs,
                  sd_mount_point=config.SD_MOUNT_POINT,
@@ -47,7 +47,8 @@ class SDLogger:
             self._current_date = None  # for daily log file rotation (int of form YYYYMMDD)
             self._error_row_count = None          # in-memory row counter
             self._last_error_times = {}          # key -> epoch of last logged error (throttle)
-
+            self._rows_since_flush = 0   # appended rows since last used flush
+            
             # try to initialize current date from existing data file
             self._init_current_date()
             # try to initialize current rows from existing error file
@@ -184,10 +185,12 @@ class SDLogger:
                 print(row)
             with open(self.data_path, 'a') as f:
                 f.write(row)
-                
-                # we are implementing flush, os.sync to ensure file does not get corrupted if power outage during file I/O
-                f.flush()
-                self._safe_sync()
+                self._rows_since_flush += 1
+                if self._rows_since_flush >= 10: # flush every N rows
+                    # we are implementing flush, os.sync to ensure file does not get corrupted if power outage during file I/O
+                    f.flush()
+                    self._safe_sync()
+                    self._rows_since_flush = 0
                 
         except Exception as e:
             if self.debug:
