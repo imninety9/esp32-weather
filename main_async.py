@@ -48,13 +48,16 @@ class State:
          "ds18b20_temp","sht_temp","sht_hum",
          "pm1_0","pm2_5","pm10",
          "owm_temp","owm_temp_feels_like","owm_hum","owm_press",
-         "owm_aqi","owm_pm2_5","owm_pm10","owm_no2"]
+         "owm_pm2_5","owm_pm10","owm_no2"]
          '''
-        self.sensor_row = [None] * 19
+        self.sensor_row = [""] * 18
 
         # Latest external sources
-        self.owm = [None] * 8  # temp, feels_like, hum, press, aqi, pm2.5, pm10, no2
+        self.owm = [None] * 7  # temp, feels_like, hum, press, pm2.5, pm10, no2
         self.apm = [None, None, None]   # pm1, pm2_5, pm10
+        # aqi buffers
+        self.owm_aqi_buf = {}
+        self.apm_aqi_buf = {}
 
         # Timestamps
         self.last_sensor_ts = None
@@ -111,10 +114,9 @@ def rtc_tup(rtc=None):
                 t = rtc.get_time()
                 if t:
                     return t
-        except Exception:
-            pass
-        # fallback
-        return time.localtime()
+        except:
+            # fallback
+            return time.localtime()
     
 def tup_to_iso(t):  
     """Convert time tuple (Y, M, D, H, M, S, ...) to 'YYYY-MM-DD hh:mm:ss'."""
@@ -127,15 +129,7 @@ def format_value(value, precision=2):
     """Format values for CSV / MQTT."""
     if value is None:
         return ""
-    
-    t = type(value)
-    
-    if t is int:
-        return str(value)
-    if t is float:
-        return ("%." + str(precision) + "f") % value
-    # Fallback
-    return str(value)
+    return str(value) if not isinstance(value, float) else ("%." + str(precision) + "f") % value
 
 
 def format_uptime(boot_ticks):
@@ -153,7 +147,7 @@ def format_uptime(boot_ticks):
 
 def update_row(row, ts, sensor_data, owm_data, apm_data):
     """
-    Update CSV row matching config.csv_fields [list is immutable object]
+    Update CSV row matching config.csv_fields [list is mutable object]
     """
     row[0] = tup_to_iso(ts)
     row[1] = format_value(sensor_data[0][0])
@@ -173,7 +167,6 @@ def update_row(row, ts, sensor_data, owm_data, apm_data):
     row[15] = format_value(owm_data[4])
     row[16] = format_value(owm_data[5])
     row[17] = format_value(owm_data[6])
-    row[18] = format_value(owm_data[7])
 
 
 def compute_backoff(base, fail_count, max_backoff, jitter_pct=0.15):
@@ -196,41 +189,38 @@ def compute_backoff(base, fail_count, max_backoff, jitter_pct=0.15):
 
 
 # particulate conc to AQI
-LOW_BREAKPOINTS_AQI = [0, 51, 101, 201, 301, 401]
+LOW_BREAKPOINTS_AQI = (0, 51, 101, 201, 301, 401)
 LOW_BREAKPOINTS = {
-                   "PM10": [0, 51, 101, 251, 351, 431],
-                   "PM2_5": [0, 31, 61, 91, 121, 251],
-                   "NO2": [0, 41, 81, 181, 281, 401],
-                   "O3": [0, 51, 101, 169, 209, 749],
-                   "CO": [0.0, 1.1, 2.1, 10.1, 17.1, 34.1],
-                   "SO2": [0, 41, 81, 381, 801, 1601],
-                   "NH3": [0, 201, 401, 801, 1201, 1801],
-                   "Pb": [0.0, 0.6, 1.1, 2.1, 3.1, 3.6]
+                   "PM10": (0, 51, 101, 251, 351, 431),
+                   "PM2_5": (0, 31, 61, 91, 121, 251),
+                   "NO2": (0, 41, 81, 181, 281, 401),
+                   "O3": (0, 51, 101, 169, 209, 749),
+                   "CO": (0.0, 1.1, 2.1, 10.1, 17.1, 34.1),
+                   "SO2": (0, 41, 81, 381, 801, 1601),
+                   "NH3": (0, 201, 401, 801, 1201, 1801),
+                   "Pb": (0.0, 0.6, 1.1, 2.1, 3.1, 3.6)
                    }
-HIGH_BREAKPOINTS_AQI = [50, 100, 200, 300, 400, 500]
+HIGH_BREAKPOINTS_AQI = (50, 100, 200, 300, 400, 500)
 HIGH_BREAKPOINTS = {
-                    "PM10": [50, 100, 250, 350, 430],
-                    "PM2_5": [30, 60, 90, 120, 250],
-                    "NO2": [40, 80, 180, 280, 400],
-                    "O3": [50, 100, 168, 208, 748],
-                    "CO": [1.0, 2.0, 10.0, 17.0, 34.0],
-                    "SO2": [40, 80, 380, 800, 1600],
-                    "NH3": [200, 400, 800, 1200, 1800],
-                    "Pb": [0.5, 1.0, 2.0, 3.0, 3.5]
+                    "PM10": (50, 100, 250, 350, 430),
+                    "PM2_5": (30, 60, 90, 120, 250),
+                    "NO2": (40, 80, 180, 280, 400),
+                    "O3": (50, 100, 168, 208, 748),
+                    "CO": (1.0, 2.0, 10.0, 17.0, 34.0),
+                    "SO2": (40, 80, 380, 800, 1600),
+                    "NH3": (200, 400, 800, 1200, 1800),
+                    "Pb": (0.5, 1.0, 2.0, 3.0, 3.5)
                     }
 _FLOAT_ONE_DEC_KEYS = ("CO", "Pb")
 
-def conc_to_aqi(concentrations):
+def conc_to_aqi(concentrations, aqi_dict):
     """
     concentrations: dict { pollutant: concentration }
-    Returns:
-        I:   dict { pollutant: individual AQI (or None if invalid) }
-        aqi: overall AQI (max of valid I values, or None)
+    aqi_dict: Updates this aqi dictionary as { pollutant: aqi }
     """
-    I = {}
     for key, value in concentrations.items():
         if value is None or value<0:
-            I[key] = None
+            aqi_dict[key] = None
             continue
         
         # rounding style: 1 decimal place for CO/Pb, nearest int for others
@@ -252,7 +242,7 @@ def conc_to_aqi(concentrations):
 
         if cat_idx == -1:
             # above last breakpoint -> clamp to max AQI
-            I[key] = 500
+            aqi_dict[key] = 500
             continue
         
         # linear interpolation:
@@ -264,21 +254,12 @@ def conc_to_aqi(concentrations):
 
         # avoid division by zero if breakpoints are malformed
         if c_hi == c_lo:
-            I[key] = i_hi
+            aqi_dict[key] = i_hi
         else:
-            I[key] = round(
+            aqi_dict[key] = round(
                 ((i_hi - i_lo) * (value - c_lo) / (c_hi - c_lo))
                 + i_lo
             )
-    
-    # find overall AQI
-    aqi = None
-    for v in I.values():
-        if v is not None: # filter out invalid values (None)
-            if aqi is None or v > aqi:
-                aqi = v
-    
-    return I, aqi
 
 
 # --------------------------------------------------------------------
@@ -292,6 +273,8 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
     mqtt_feeds = config.feeds
     mqtt_msgs = [None]*9  # pre-allocating once at module top to avoid re-allocating new list each time
 
+    STATUS_FMT = "T:%s UP:%s iPM2.5:%s iPM10:%s oPM2.5:%s oPM10:%s"
+    
     while True:
         try:
             gc.collect()
@@ -343,18 +326,16 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
             sd.append_row(state.sensor_row, ts=ts)
             
             # 5. Try MQTT publish
-            if state.mqtt_ok and state.mqtt_client:
+            if state.mqtt_client and state.mqtt_ok:
                 try:
-                    i1, _ = conc_to_aqi({"PM2_5": state.apm[1], "PM10": state.apm[2]})
-                    i2, _ = conc_to_aqi({"PM2_5": state.owm[5], "PM10": state.owm[6]})
                     mqtt_msgs[0] = state.sensor_row[1]   # bmp_temp
                     mqtt_msgs[1] = state.sensor_row[2]   # bmp_press
                     mqtt_msgs[2] = state.sensor_row[3]  # aht_temp
                     mqtt_msgs[3] = state.sensor_row[4]  # aht_hum
-                    mqtt_msgs[4] = "T:%s UP:%s iPM2.5:%s iPM10:%s oPM2.5:%s oPM10:%s" % (
+                    mqtt_msgs[4] = STATUS_FMT % (
                                         state.sensor_row[5], format_uptime(state.boot_ticks),
-                                        format_value(i1.get("PM2_5")), format_value(i1.get("PM10")),
-                                        format_value(i2.get("PM2_5")), format_value(i2.get("PM10"))
+                                        format_value(state.apm_aqi_buf["PM2_5"]), format_value(state.apm_aqi_buf["PM10"]),
+                                        format_value(state.owm_aqi_buf["PM2_5"]), format_value(state.owm_aqi_buf["PM10"])
                                         ) # ds18b20_temp, uptime, indoor aqi, outdoor aqi
                     mqtt_msgs[5] = state.sensor_row[11]  # owm_temp
                     mqtt_msgs[6] = state.sensor_row[12]  # owm_feels_like
@@ -365,10 +346,9 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
                 except Exception as e:
                     # Mark MQTT as broken so wifi_mqtt_task will reconnect later
                     state.mqtt_ok = False
-                    state.mqtt_client = None
                     sd.append_error("mqtt_publish_fail", e, ts=rtc_tup(rtc))
             
-            state.heartbeat = time.time() # <<-- Sensor log task success heartbeat
+            state.heartbeat = time.ticks_ms() # <<-- Sensor log task success heartbeat
             
         except Exception as e:
             sd.append_error("sensor_and_log_task_error", e, ts=rtc_tup(rtc), min_interval=300)
@@ -384,6 +364,9 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
 async def owm_task(rtc, state, owm_client, sd):
     """Fetch OpenWeatherMap data every OWM_FETCH_INTERVAL_SECS when Wi-Fi is OK."""
     interval = config.OWM_FETCH_INTERVAL_SECS
+    # fetch aqi each 60 minutes only
+    aqi_count = 0
+    aqi_cycle = 3600 // interval
     
     while True:
         if state.apm_running:
@@ -394,14 +377,18 @@ async def owm_task(rtc, state, owm_client, sd):
         # else go fetch OWM (with a short timeout)
         try:
             if state.wifi_ok:
-                # blocking but with a timeout of 10 s
-                owm_data = owm_client.fetch()  # [temp, feels_like, hum, press]
-                state.owm = owm_data
+                # blocking but with a timeout of 5 s
+                fetch_aqi = (aqi_count == 0) # True/Flase
+                owm_data = owm_client.fetch(fetch_aqi=fetch_aqi)
+                aqi_count = (aqi_count + 1) % aqi_cycle
+                state.owm = owm_data # [temp, feels_like, hum, press, pm2.5, pm10, no2]
+                if fetch_aqi:
+                    conc_to_aqi({"PM2_5": state.owm[4], "PM10": state.owm[5], "NO2": state.owm[6]}, state.owm_aqi_buf)
                 state.last_owm_ts = rtc_tup(rtc)
-                state.heartbeat = time.time()   # <<-- OWM task success heartbeat
+                state.heartbeat = time.ticks_ms()   # <<-- OWM task success heartbeat
         except Exception as e:
             sd.append_error("owm_task_error", e, ts=rtc_tup(rtc))
-                
+              
         await asyncio.sleep(interval)
 
 
@@ -434,29 +421,29 @@ async def apm10_task(rtc, state, apm_sensor, sd):
             total_pm10 = 0.0
             # Take ~3 samples, keep last 2; sensor min interval ~1s
             for i in range(3):
-                try:
-                    data = apm_sensor.read_measurements()  # (pm1, pm2_5, pm10) or (None,...)
-                    if data and data[0] is not None:
-                        # drop oldest
-                        if i == 0:
-                            continue
-                        else:
-                            total_pm1 += data[0]
-                            total_pm25 += data[1]
-                            total_pm10 += data[2]
-                            n += 1
-                except Exception as e:
-                    if config.debug:
-                        print("APM read error:", e)
+                data = apm_sensor.read_measurements()  # (pm1, pm2_5, pm10) or (None,...)
+                if data and data[0] is not None:
+                    # drop oldest
+                    if i == 0:
+                        continue
+                    else:
+                        total_pm1 += data[0]
+                        total_pm25 += data[1]
+                        total_pm10 += data[2]
+                        n += 1
                 await asyncio.sleep(1.2) # APM10 min 1s interval
             
-            state.apm = [
-                total_pm1 / n,
-                total_pm25 / n,
-                total_pm10 / n,
-            ]
+            if n == 0: # avoid division by zero
+                state.apm = [None, None, None]
+            else:
+                state.apm = [
+                    total_pm1 / n,
+                    total_pm25 / n,
+                    total_pm10 / n,
+                ]
+            conc_to_aqi({"PM2_5": state.apm[1], "PM10": state.apm[2]}, state.apm_aqi_buf)
             state.last_apm_ts = rtc_tup(rtc)
-            state.heartbeat = time.time()   # <<-- APM10 task success heartbeat
+            state.heartbeat = time.ticks_ms()   # <<-- APM10 task success heartbeat
 
         except Exception as e:
             sd.append_error("apm10_task_error", e, ts=rtc_tup(rtc))
@@ -504,7 +491,7 @@ async def wifi_mqtt_task(rtc, state, sd):
                     state.wlan = wlan
                     state.wifi_ok = True
                     wifi_fail_count = 0 # reset backoff state
-                    state.heartbeat = time.time()   # <<-- WIFI success heartbeat
+                    state.heartbeat = time.ticks_ms()   # <<-- WIFI success heartbeat
                 except Exception as e:
                     # Connection failed this cycle
                     state.wifi_ok = False # since, wifi connect failed
@@ -526,7 +513,7 @@ async def wifi_mqtt_task(rtc, state, sd):
                     )
                     state.mqtt_ok = True # connection successful, if reached here without any error
                     mqtt_fail_count = 0 # reset backoff state
-                    state.heartbeat = time.time()   # <<-- MQTT success heartbeat
+                    state.heartbeat = time.ticks_ms()   # <<-- MQTT success heartbeat
                 except Exception as e:
                     # Mark mqtt as failed; next cycle we will back off
                     state.mqtt_client = None
@@ -536,7 +523,6 @@ async def wifi_mqtt_task(rtc, state, sd):
 
             if not state.wifi_ok:
                 # if Wi-Fi is down, MQTT can't be up
-                state.mqtt_client = None
                 state.mqtt_ok = False
 
         except Exception as e:
@@ -583,10 +569,7 @@ async def health_log_task(rtc, state, sd):
 # --- Helper ---
 def _safe_val(val, default="--"):
     """Return val or default without raising; val may be None."""
-    try:
-        return val or default
-    except Exception:
-        return default
+    return val or default
 #---------------
     
 def draw_lcd_page(lcd, state, page):
@@ -601,7 +584,7 @@ def draw_lcd_page(lcd, state, page):
     lcd.power_on() # switch on the screen
     lcd.fill(0) # clear screen (ddram)
     
-    row = state.sensor_row or [""] * 16 # Remember: row is list of formatted strings
+    row = state.sensor_row # Remember: row is list of formatted strings
 
     if page == 1: # page == 1
         # System status
@@ -616,7 +599,7 @@ def draw_lcd_page(lcd, state, page):
         try:
             hb = getattr(state, "heartbeat", None)
             if hb:
-                age = int(time.time() - hb)
+                age = time.ticks_diff(time.ticks_ms(), state.heartbeat) // 1000
                 # if heartbeat younger than 120s show OK, else show seconds
                 if age <= 90:
                     lcd.text("HB: OK", 0, 24)
@@ -656,14 +639,11 @@ def draw_lcd_page(lcd, state, page):
         
     elif page == 4: # page == 4
         # APM + OWM AQI snapshot
-        i, aqi = conc_to_aqi({"PM2_5": state.apm[1], "PM10": state.apm[2]})
-        lcd.text("i2.5 %s" % _safe_val(format_value(i.get("PM2_5"))), 0, 0)
-        lcd.text("i10  %s" % _safe_val(format_value(i.get("PM10"))), 0, 8)
-        lcd.text("iAQI %s" % _safe_val(format_value(aqi)), 0, 16)
-        i, aqi = conc_to_aqi({"PM2_5": state.owm[5], "PM10": state.owm[6]})
-        lcd.text("o2.5 %s" % _safe_val(format_value(i.get("PM2_5"))), 0, 24)
-        lcd.text("o10  %s" % _safe_val(format_value(i.get("PM10"))), 0, 32)
-        lcd.text("oAQI %s %s" % (_safe_val(row[15]), _safe_val(format_value(aqi))), 0, 40)
+        lcd.text("i2.5 %s" % _safe_val(format_value(state.apm_aqi_buf["PM2_5"])), 0, 0)
+        lcd.text("i10  %s" % _safe_val(format_value(state.apm_aqi_buf["PM10"])), 0, 8)
+        lcd.text("o2.5 %s" % _safe_val(format_value(state.owm_aqi_buf["PM2_5"])), 0, 16)
+        lcd.text("o10  %s" % _safe_val(format_value(state.owm_aqi_buf["PM10"])), 0, 24)
+        lcd.text("oNO2 %s" % _safe_val(format_value(state.owm_aqi_buf["NO2"])), 0, 32)
     
     elif page == 5: # page == 5
         # Debug Page
@@ -684,7 +664,7 @@ async def button_lcd_task(state, lcd, button1_pin, button2_pin):
     - POLL_MS: main loop sleep
     """
     POLL_MS = 80 # existing sleep
-    DISPLAY_TIMEOUT = 15  # seconds after last button press
+    DISPLAY_TIMEOUT_MS = 15000  # milliseconds after last button press
     DEBOUNCE_MS = 20
     TOTAL_PAGES = 5 # total number of pages
 
@@ -697,7 +677,7 @@ async def button_lcd_task(state, lcd, button1_pin, button2_pin):
     # ---- turn LCD on at startup and show page 1 ----
     draw_lcd_page(lcd, state, 1)   # show page 1 immediately
     lcd_on = True
-    last_press_time = time.time()
+    last_press_time = time.ticks_ms()
     # --------------------------------------
     
     while True:
@@ -706,7 +686,7 @@ async def button_lcd_task(state, lcd, button1_pin, button2_pin):
 
         # NEXT button edge: just pressed
         if level1 == 0 and last_level1 == 1:
-            now = time.time()
+            now = time.ticks_ms()
             # debounce
             await asyncio.sleep_ms(DEBOUNCE_MS)
             if button1_pin.value() == 0:
@@ -723,7 +703,7 @@ async def button_lcd_task(state, lcd, button1_pin, button2_pin):
                 
         # PREV button edge: just pressed
         if level2 == 0 and last_level2 == 1:
-            now = time.time()
+            now = time.ticks_ms()
             # debounce
             await asyncio.sleep_ms(DEBOUNCE_MS)
             if button2_pin.value() == 0:
@@ -740,7 +720,7 @@ async def button_lcd_task(state, lcd, button1_pin, button2_pin):
                 
         
         # auto-off
-        if lcd_on and (time.time() - last_press_time >= DISPLAY_TIMEOUT):
+        if lcd_on and (time.ticks_diff(time.ticks_ms(), last_press_time) >= DISPLAY_TIMEOUT_MS):
             lcd.clear()            
             lcd.power_off() # save power by switching the screen off
             lcd_on = False
@@ -770,7 +750,7 @@ async def watchdog_manager(rtc, state, sd, hard_wdt=None):
     """
     Single watchdog task that:
       - feeds hardware WDT (wdt.feed())
-      - checks state.heartbeat; if stale by soft_wdt_timeout_s => reset
+      - checks state.heartbeat; if stale by soft_wdt_timeout_ms => reset
 
     Params:
       - rtc: rtc object
@@ -779,29 +759,25 @@ async def watchdog_manager(rtc, state, sd, hard_wdt=None):
       - wdt: hardware WDT object or None 
     """
     
-    hard_wdt_feed_interval_s = config.HARD_WDT_FEED_INTERVAL_S # how often to feed hardware WDT (seconds)
-    soft_wdt_timeout_s = config.SOFT_WDT_TIMEOUT_S # software wdt timeout (seconds) - reset if no heartbeat            
-    check_interval_s = min(hard_wdt_feed_interval_s, max(1, soft_wdt_timeout_s // 3)) # how often to run checks
+    hard_wdt_feed_interval_ms = config.HARD_WDT_FEED_INTERVAL_MS # how often to feed hardware WDT (milliseconds)
+    soft_wdt_timeout_ms = config.SOFT_WDT_TIMEOUT_MS # software wdt timeout (milliseconds) - reset if no heartbeat            
+    check_interval_ms = min(hard_wdt_feed_interval_ms, max(1, soft_wdt_timeout_ms // 3)) # how often to run checks
 
     while True:
         try:
-            # feed hardware WDT at hw_feed_interval_s cadence
+            # feed hardware WDT at hw_feed_interval_ms cadence
             if hard_wdt:
-                try:
-                    hard_wdt.feed()
-                except Exception:
-                    # ignore feed failures; next iteration will try again
-                    pass
+                hard_wdt.feed()
 
             # check software heartbeat
             last = getattr(state, "heartbeat", None)
             if last is not None:
-                now = time.time()
-                if now - last > soft_wdt_timeout_s:
+                age_ms = time.ticks_diff(time.ticks_ms(), state.heartbeat)
+                if age_ms > soft_wdt_timeout_ms:
                     # Soft watchdog triggered: log and reset (best-effort, minimal prints)
-                    sd.append_error("watchdog_stale:", "stale:%.0f, reboot" % (now - last), ts=rtc_tup(rtc), force=True)
+                    sd.append_error("watchdog_stale", "stale:%.0f, reboot" % (age_ms//1000), ts=rtc_tup(rtc), force=True)
                     # short delay for logs to flush
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep_ms(200)
                     reset() # machine.reset()
             # else: no heartbeat yet — just allow sleep and try again later
             
@@ -809,7 +785,7 @@ async def watchdog_manager(rtc, state, sd, hard_wdt=None):
             # never let watchdog task crash; swallow and continue after a short pause
             pass
 
-        await asyncio.sleep(check_interval_s)
+        await asyncio.sleep_ms(check_interval_ms)
         
 
 # --------------------------------------------------------------------
@@ -842,7 +818,7 @@ async def main():
             state.wlan = wlan
             state.wifi_ok = True
             #rtc.sync_time_with_ntp()
-            state.heartbeat = time.time()   # <<-- mark initial good state
+            state.heartbeat = time.ticks_ms()   # <<-- mark initial good state
             if config.debug:
                 print("RTC synced with NTP")
     except Exception as e:
@@ -877,7 +853,7 @@ async def main():
     apm_sensor = getattr(sensors, "apm", None)
     
     # --- OWM client ---
-    owm_client = OWMClient(config.OWM_URL, config.OWM_URL_AQI, config.OWM_HEADERS)
+    owm_client = OWMClient(config.OWM_URL, config.OWM_URL_AQI)
     
     # --- LCD (SPI) ---
     # NOTE: In, ESP32, SPI(2) bus is being internally used by machine.SDCard;
