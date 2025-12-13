@@ -46,7 +46,7 @@ class OWMClient:
             if config.debug:
                 print("AQI fetch failed:", e)
     
-    def fetch(self, fetch_aqi=True)
+    def fetch(self, fetch_aqi=True):
         self.fetch_weather()
         if fetch_aqi:
             self.fetch_aqi()

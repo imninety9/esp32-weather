@@ -27,7 +27,7 @@ class Sensors:
                 self.aht25 = None
             try:
                 from bmp280_sensor import BMP280Driver
-                self.bmp280 = BMP280Driver(i2c, i2c_address=0x76, use_case=BMP280_CASE_WEATHER)
+                self.bmp280 = BMP280Driver(i2c, i2c_address=0x76)
             except:
                 self.bmp280 = None
             try:
