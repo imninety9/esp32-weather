@@ -411,6 +411,7 @@ async def apm10_task(rtc, state, apm_sensor, sd):
     Uses await sleeps between samples so other tasks can run.
     """
     interval = config.APM10_INTERVAL_SECS  # seconds between PM updates
+    STABILIZATION_SECS = 20 # Wait for stabilization
     
     # If the sensor isn't present, exit the task cleanly without looping it
     if apm_sensor is None:
@@ -425,41 +426,37 @@ async def apm10_task(rtc, state, apm_sensor, sd):
         try:
             # Enter measurement mode
             apm_sensor.enter_measurement_mode()
-            samples = []
-
-            # Warm-up and Take ~20 samples, keep last 10; sensor min interval ~1s
-            for _ in range(20):
+            await asyncio.sleep(STABILIZATION_SECS) # warm-up for stabilization
+            
+            n = 0
+            total_pm1 = 0.0
+            total_pm25 = 0.0
+            total_pm10 = 0.0
+            # Take ~3 samples, keep last 2; sensor min interval ~1s
+            for i in range(3):
                 try:
                     data = apm_sensor.read_measurements()  # (pm1, pm2_5, pm10) or (None,...)
                     if data and data[0] is not None:
-                        samples.append(data)
-                        # keep list length ≤ 10, drop oldest
-                        if len(samples) > 10:
-                            del samples[0]
+                        # drop oldest
+                        if i == 0:
+                            continue
+                        else:
+                            total_pm1 += data[0]
+                            total_pm25 += data[1]
+                            total_pm10 += data[2]
+                            n += 1
                 except Exception as e:
                     if config.debug:
                         print("APM read error:", e)
                 await asyncio.sleep(1.2) # APM10 min 1s interval
-
-            if samples:
-                # Use last ~10 to avoid warm-up
-                n = len(samples)
-                total_pm1 = 0.0
-                total_pm25 = 0.0
-                total_pm10 = 0.0
-                # manual sums (no generator allocations)
-                for pm1, pm25, pm10 in samples:
-                    total_pm1 += pm1
-                    total_pm25 += pm25
-                    total_pm10 += pm10
-
-                state.apm = [
-                    total_pm1 / n,
-                    total_pm25 / n,
-                    total_pm10 / n,
-                ]
-                state.last_apm_ts = rtc_tup(rtc)
-                state.heartbeat = time.time()   # <<-- APM10 task success heartbeat
+            
+            state.apm = [
+                total_pm1 / n,
+                total_pm25 / n,
+                total_pm10 / n,
+            ]
+            state.last_apm_ts = rtc_tup(rtc)
+            state.heartbeat = time.time()   # <<-- APM10 task success heartbeat
 
         except Exception as e:
             sd.append_error("apm10_task_error", e, ts=rtc_tup(rtc))
