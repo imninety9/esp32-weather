@@ -114,7 +114,7 @@ csv_fields = ["timestamp",
               "sht_temp","sht_hum",
               "pm1_0", "pm2_5", "pm10",
               "owm_temp","owm_temp_feels_like","owm_hum","owm_press",
-              "owm_aqi","owm_pm2_5","owm_pm10","owm_no2"
+              "owm_pm2_5","owm_pm10","owm_no2"
               ]
 
 
@@ -140,5 +140,6 @@ DEFAULT_ERROR_THROTTLE = const(3600)        # seconds
 
 # watchdog
 HARD_WDT_TIMEOUT_MS = const(120000) # 120 s (keep it significantly larger than the largest blocking window in the code)
-SOFT_WDT_TIMEOUT_S = const(1200) # 20 min
-HARD_WDT_FEED_INTERVAL_S = const(20)
+SOFT_WDT_TIMEOUT_MS = const(1200000) # 20 min
+HARD_WDT_FEED_INTERVAL_MS = const(20000)
+
