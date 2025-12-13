@@ -75,12 +75,13 @@ if __name__ == "__main__":
         if apm:
             # Enter the sensor into the measurement mode
             apm.enter_measurement_mode()
+            time.sleep(20)  # warm-up for stabilization
 
             # Continuously read air quality data
             while True:
                 air_quality = apm.read_measurements()
                 print(f"PM1.0: {air_quality[0]} µg/m³, PM2.5: {air_quality[1]} µg/m³, PM10: {air_quality[2]} µg/m³")
-                time.sleep(10)  # Read every 10 seconds
+                time.sleep(2)  # Read every 10 seconds
 
     except Exception as e:
         print("Error: ", e)
