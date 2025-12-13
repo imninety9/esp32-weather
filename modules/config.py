@@ -1,13 +1,15 @@
 # configuration file
 
+from micropython import const
+
 debug = True
 debug_mem = False
 
 # SENSOR UPDATE INTERVAL
-SENSOR_INTERVAL_SECS = 300 # [interval between weather readings update]
-OWM_FETCH_INTERVAL_SECS = 600
-APM10_INTERVAL_SECS = 3600
-HEALTH_LOG_INTERVAL_SECS = 30
+SENSOR_INTERVAL_SECS = const(300) # [interval between weather readings update]
+OWM_FETCH_INTERVAL_SECS = const(600)
+APM10_INTERVAL_SECS = const(3600)
+HEALTH_LOG_INTERVAL_SECS = const(30)
 
 # WIFI PARAMETERS
 # List of WiFi networks with priorities (higher the better) [pre-sorted]
@@ -18,43 +20,43 @@ WIFI_PASS = ".."
 
 # PHYSICAL PARAMETRS [GPIO PINS]
 # I2C Pins
-sdaPIN = 21
-sclPIN = 22
+sdaPIN = const(21)
+sclPIN = const(22)
 
 # DS3231 rtc INT/SQW Pin
-alarmPIN = 27
+alarmPIN = const(27)
 
 # Software I2C pins (used by sht40 sensor module)
-soft_sdaPIN = 25
-soft_sclPIN = 26
+soft_sdaPIN = const(25)
+soft_sclPIN = const(26)
 
 # SPI Pins
-SPI_PIN_MISO = 19
-SPI_PIN_MOSI = 23
-SPI_PIN_SCK = 18
-SPI_PIN_CS = 5 # You can choose any available GPIO pin for CS
+SPI_PIN_MISO = const(19)
+SPI_PIN_MOSI = const(23)
+SPI_PIN_SCK = const(18)
+SPI_PIN_CS = const(5) # You can choose any available GPIO pin for CS
 
 SD_MOUNT_POINT = '/sd'
 
 # Nokia 5510 LCD Pins (uses the hspi bus)
 # Nokia 5510 LCD Pin Function ESP32 GPIO	Notes
-LCD_RST = 16 # Reset
-LCD_CE = 17 # Chip Enable (CS)
-LCD_DC = 32 # Data/Command
-LCD_DIN = 13 # Data In (MOSI) [SPI MOSI]
-LCD_CLK = 14 # Clock [SPI SCK]
+LCD_RST = const(16) # Reset
+LCD_CE = const(17) # Chip Enable (CS)
+LCD_DC = const(32) # Data/Command
+LCD_DIN = const(13) # Data In (MOSI) [SPI MOSI]
+LCD_CLK = const(14) # Clock [SPI SCK]
 
 # Onewire pin (for onewire communication protocol devices like ds18b20)
-ONEWIRE_PIN = 4
+ONEWIRE_PIN = const(4)
 
 # Input Button Pin
-BUTTON_1 = 35 # (LOW when pressed, pulled HIGH via 10k ohm resistor)
-BUTTON_2 = 34 # (LOW when pressed, pulled HIGH via 10k ohm resistor)
+BUTTON_1 = const(35) # (LOW when pressed, pulled HIGH via 10k ohm resistor)
+BUTTON_2 = const(34) # (LOW when pressed, pulled HIGH via 10k ohm resistor)
 
 
 # lat, long = ghitorni, new delhi
-latitude = ..
-longitude = ..
+latitude = const(..)
+longitude = const(..)
 
 # OPENWEATHERMAP API PARAMETERS
 owm_api_key = '..'
@@ -117,26 +119,26 @@ csv_fields = ["timestamp",
 
 
 # wifi, mqtt backoff
-WIFI_BASE_BACKOFF = 30   # seconds
-WIFI_MAX_BACKOFF = 3600 # cap (e.g. 30 min)
-MQTT_BASE_BACKOFF = 15 # sec
-MQTT_MAX_BACKOFF  = 1800 # sec
-BACKOFF_JITTER_PCT =  0.15  # ±15%
-CONNECT_POLL =  0.2  # 0.2s poll for responsiveness
-WIFI_CONNECT_TIMEOUT = 10  # secs per attempt
+WIFI_BASE_BACKOFF = const(30)   # seconds
+WIFI_MAX_BACKOFF = const(3600) # cap (e.g. 30 min)
+MQTT_BASE_BACKOFF = const(15) # sec
+MQTT_MAX_BACKOFF  = const(1800) # sec
+BACKOFF_JITTER_PCT =  const(0.15)  # ±15%
+CONNECT_POLL =  const(0.2)  # 0.2s poll for responsiveness
+WIFI_CONNECT_TIMEOUT = const(10)  # secs per attempt
 
 
 # Logging
 DEFAULT_DATA_PATH = "/sd/weather.csv"
 DEFAULT_ERROR_PATH = "/sd/errors.log"
 DEFAULT_HEALTH_PATH = "/sd/health.csv" # Health log (uptime, memory)
-DEFAULT_ERROR_ROW_LIMIT = 500  #
-ERROR_AVG_ROW = 60 # bytes
-DEFAULT_ERROR_RETENTION = 5 # number of files
-DEFAULT_ERROR_THROTTLE = 3600        # seconds
+DEFAULT_ERROR_ROW_LIMIT = const(500)  #
+ERROR_AVG_ROW = const(60) # bytes
+DEFAULT_ERROR_RETENTION = const(5) # number of files
+DEFAULT_ERROR_THROTTLE = const(3600)        # seconds
 
 
 # watchdog
-HARD_WDT_TIMEOUT_MS = 120000 # 120 s (keep it significantly larger than the largest blocking window in the code)
-SOFT_WDT_TIMEOUT_S = 1200 # 20 min
-HARD_WDT_FEED_INTERVAL_S = 20
+HARD_WDT_TIMEOUT_MS = const(120000) # 120 s (keep it significantly larger than the largest blocking window in the code)
+SOFT_WDT_TIMEOUT_S = const(1200) # 20 min
+HARD_WDT_FEED_INTERVAL_S = const(20)
