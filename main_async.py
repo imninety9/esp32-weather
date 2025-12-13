@@ -34,6 +34,7 @@ class State:
         "last_sensor_ts", "last_owm_ts", "last_apm_ts",
         "wifi_ok", "mqtt_ok", "wlan", "mqtt_client",
         "apm_running",
+        "sht_heater_mode", "sht_high_rh_count", "sht_heater_cycles_left",
         "heartbeat"
     )
     
@@ -42,7 +43,14 @@ class State:
         self.boot_ticks = time.ticks_ms() # Uptime base (monotonic, not affected by RTC changes)
         
         # Last full row logged / ready to log (list of values)
-        self.sensor_row = None
+        '''
+        ["timestamp","bmp_temp","bmp_press","aht_temp","aht_hum",
+         "ds18b20_temp","sht_temp","sht_hum",
+         "pm1_0","pm2_5","pm10",
+         "owm_temp","owm_temp_feels_like","owm_hum","owm_press",
+         "owm_aqi","owm_pm2_5","owm_pm10","owm_no2"]
+         '''
+        self.sensor_row = [None] * 19
 
         # Latest external sources
         self.owm = [None] * 8  # temp, feels_like, hum, press, aqi, pm2.5, pm10, no2
@@ -143,37 +151,29 @@ def format_uptime(boot_ticks):
     return "%02d:%02d:%02d" % (hrs, mins, s)
 
 
-def make_row(ts, sensor_data, owm_data, apm_data):
+def update_row(row, ts, sensor_data, owm_data, apm_data):
     """
-    Build one CSV row matching config.csv_fields:
-    ["timestamp","bmp_temp","bmp_press","aht_temp","aht_hum",
-     "ds18b20_temp","sht_temp","sht_hum",
-     "pm1_0","pm2_5","pm10",
-     "owm_temp","owm_temp_feels_like","owm_hum","owm_press",
-     "owm_aqi","owm_pm2_5","owm_pm10","owm_no2"]
+    Update CSV row matching config.csv_fields [list is immutable object]
     """
-    
-    return [
-        tup_to_iso(ts),
-        format_value(sensor_data[0][0]),
-        format_value(sensor_data[0][1]),
-        format_value(sensor_data[1][0]),
-        format_value(sensor_data[1][1]),
-        format_value(sensor_data[2]),
-        format_value(sensor_data[3][0]),
-        format_value(sensor_data[3][1]),
-        format_value(apm_data[0]),
-        format_value(apm_data[1]),
-        format_value(apm_data[2]),
-        format_value(owm_data[0]),
-        format_value(owm_data[1]),
-        format_value(owm_data[2]),
-        format_value(owm_data[3]),
-        format_value(owm_data[4]),
-        format_value(owm_data[5]),
-        format_value(owm_data[6]),
-        format_value(owm_data[7])
-    ]
+    row[0] = tup_to_iso(ts)
+    row[1] = format_value(sensor_data[0][0])
+    row[2] = format_value(sensor_data[0][1])
+    row[3] = format_value(sensor_data[1][0])
+    row[4] = format_value(sensor_data[1][1])
+    row[5] = format_value(sensor_data[2])
+    row[6] = format_value(sensor_data[3][0])
+    row[7] = format_value(sensor_data[3][1])
+    row[8] = format_value(apm_data[0])
+    row[9] = format_value(apm_data[1])
+    row[10] = format_value(apm_data[2])
+    row[11] = format_value(owm_data[0])
+    row[12] = format_value(owm_data[1])
+    row[13] = format_value(owm_data[2])
+    row[14] = format_value(owm_data[3])
+    row[15] = format_value(owm_data[4])
+    row[16] = format_value(owm_data[5])
+    row[17] = format_value(owm_data[6])
+    row[18] = format_value(owm_data[7])
 
 
 def compute_backoff(base, fail_count, max_backoff, jitter_pct=0.15):
@@ -336,32 +336,30 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
             ts = rtc_tup(rtc)
             state.last_sensor_ts = ts
 
-            # 3. Build row (uses last known OWM + APM data)
-            row = make_row(ts, sensor_data, state.owm, state.apm)
+            # 3. Update row in state (uses last known OWM + APM data)
+            update_row(state.sensor_row, ts, sensor_data, state.owm, state.apm)
 
             # 4. Append to SD
-            sd.append_row(row, ts=ts)
-            # Save latest row in state (for display or MQTT)
-            state.sensor_row = row
+            sd.append_row(state.sensor_row, ts=ts)
             
             # 5. Try MQTT publish
             if state.mqtt_ok and state.mqtt_client:
                 try:
                     i1, _ = conc_to_aqi({"PM2_5": state.apm[1], "PM10": state.apm[2]})
                     i2, _ = conc_to_aqi({"PM2_5": state.owm[5], "PM10": state.owm[6]})
-                    mqtt_msgs[0] = row[1]   # bmp_temp
-                    mqtt_msgs[1] = row[2]   # bmp_press
-                    mqtt_msgs[2] = row[3]  # aht_temp
-                    mqtt_msgs[3] = row[4]  # aht_hum
+                    mqtt_msgs[0] = state.sensor_row[1]   # bmp_temp
+                    mqtt_msgs[1] = state.sensor_row[2]   # bmp_press
+                    mqtt_msgs[2] = state.sensor_row[3]  # aht_temp
+                    mqtt_msgs[3] = state.sensor_row[4]  # aht_hum
                     mqtt_msgs[4] = "T:%s UP:%s iPM2.5:%s iPM10:%s oPM2.5:%s oPM10:%s" % (
-                                        row[5], format_uptime(state.boot_ticks),
+                                        state.sensor_row[5], format_uptime(state.boot_ticks),
                                         format_value(i1.get("PM2_5")), format_value(i1.get("PM10")),
                                         format_value(i2.get("PM2_5")), format_value(i2.get("PM10"))
                                         ) # ds18b20_temp, uptime, indoor aqi, outdoor aqi
-                    mqtt_msgs[5] = row[11]  # owm_temp
-                    mqtt_msgs[6] = row[12]  # owm_feels_like
-                    mqtt_msgs[7] = row[13]  # owm_hum
-                    mqtt_msgs[8] = row[14]  # owm_press
+                    mqtt_msgs[5] = state.sensor_row[11]  # owm_temp
+                    mqtt_msgs[6] = state.sensor_row[12]  # owm_feels_like
+                    mqtt_msgs[7] = state.sensor_row[13]  # owm_hum
+                    mqtt_msgs[8] = state.sensor_row[14]  # owm_press
                     
                     state.mqtt_client.publish_data(mqtt_feeds, mqtt_msgs)
                 except Exception as e:
@@ -572,6 +570,7 @@ async def health_log_task(rtc, state, sd):
             uptime = format_uptime(state.boot_ticks)
             mem_free = gc.mem_free()
             mem_alloc = gc.mem_alloc()
+#             if mem_free < 20_000: print("Memory low:", mem_free)
 
             sd.append_health(rtc_tup(rtc), uptime, mem_free, mem_alloc)
         except Exception as e:
