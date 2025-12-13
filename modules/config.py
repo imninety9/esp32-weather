@@ -135,11 +135,12 @@ DEFAULT_HEALTH_PATH = "/sd/health.csv" # Health log (uptime, memory)
 DEFAULT_ERROR_ROW_LIMIT = const(500)  #
 ERROR_AVG_ROW = const(60) # bytes
 DEFAULT_ERROR_RETENTION = const(5) # number of files
-DEFAULT_ERROR_THROTTLE = const(3600)        # seconds
+DEFAULT_ERROR_THROTTLE_MS = const(3600000)        # milliseconds
 
 
 # watchdog
 HARD_WDT_TIMEOUT_MS = const(120000) # 120 s (keep it significantly larger than the largest blocking window in the code)
 SOFT_WDT_TIMEOUT_MS = const(1200000) # 20 min
 HARD_WDT_FEED_INTERVAL_MS = const(20000)
+
 
