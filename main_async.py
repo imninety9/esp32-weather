@@ -56,8 +56,8 @@ class State:
         self.owm = [None] * 7  # temp, feels_like, hum, press, pm2.5, pm10, no2
         self.apm = [None, None, None]   # pm1, pm2_5, pm10
         # aqi buffers
-        self.owm_aqi_buf = {}
-        self.apm_aqi_buf = {}
+        self.owm_aqi_buf = {"PM2_5": None, "PM10": None, "NO2": None}
+        self.apm_aqi_buf = {"PM2_5": None, "PM10": None}
 
         # Timestamps
         self.last_sensor_ts = None
@@ -125,11 +125,14 @@ def tup_to_iso(t):
     return "%04d-%02d-%02d %02d:%02d:%02d" % (t[0], t[1], t[2], t[3], t[4], t[5])
 
 
-def format_value(value, precision=2):
-    """Format values for CSV / MQTT."""
+def format_value(value):
+    """
+    Format values for CSV / MQTT.
+    precision is fixed at 2 decimal digits.
+    """
     if value is None:
         return ""
-    return str(value) if not isinstance(value, float) else ("%." + str(precision) + "f") % value
+    return str(value) if not isinstance(value, float) else "%.2f" % value
 
 
 def format_uptime(boot_ticks):
@@ -216,7 +219,7 @@ _FLOAT_ONE_DEC_KEYS = ("CO", "Pb")
 def conc_to_aqi(concentrations, aqi_dict):
     """
     concentrations: dict { pollutant: concentration }
-    aqi_dict: Updates this aqi dictionary as { pollutant: aqi }
+    aqi_dict: Updates this aqi dictionary as { pollutant: aqi_value }
     """
     for key, value in concentrations.items():
         if value is None or value<0:
@@ -317,7 +320,6 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
 
             # 2. Timestamp from RTC (DS3231)
             ts = rtc_tup(rtc)
-            state.last_sensor_ts = ts
 
             # 3. Update row in state (uses last known OWM + APM data)
             update_row(state.sensor_row, ts, sensor_data, state.owm, state.apm)
@@ -348,7 +350,8 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
                     state.mqtt_ok = False
                     sd.append_error("mqtt_publish_fail", e, ts=rtc_tup(rtc))
             
-            state.heartbeat = time.ticks_ms() # <<-- Sensor log task success heartbeat
+            state.last_sensor_ts = time.ticks_ms()
+            state.heartbeat = state.last_sensor_ts # <<-- Sensor log task success heartbeat
             
         except Exception as e:
             sd.append_error("sensor_and_log_task_error", e, ts=rtc_tup(rtc), min_interval=300)
@@ -384,8 +387,8 @@ async def owm_task(rtc, state, owm_client, sd):
                 state.owm = owm_data # [temp, feels_like, hum, press, pm2.5, pm10, no2]
                 if fetch_aqi:
                     conc_to_aqi({"PM2_5": state.owm[4], "PM10": state.owm[5], "NO2": state.owm[6]}, state.owm_aqi_buf)
-                state.last_owm_ts = rtc_tup(rtc)
-                state.heartbeat = time.ticks_ms()   # <<-- OWM task success heartbeat
+                state.last_owm_ts = time.ticks_ms()
+                state.heartbeat = state.last_owm_ts   # <<-- OWM task success heartbeat
         except Exception as e:
             sd.append_error("owm_task_error", e, ts=rtc_tup(rtc))
               
@@ -398,7 +401,7 @@ async def apm10_task(rtc, state, apm_sensor, sd):
     Uses await sleeps between samples so other tasks can run.
     """
     interval = config.APM10_INTERVAL_SECS  # seconds between PM updates
-    STABILIZATION_SECS = 20 # Wait for stabilization
+    STABILIZATION_SECS = 15 # Wait for stabilization
     
     # If the sensor isn't present, exit the task cleanly without looping it
     if apm_sensor is None:
@@ -442,8 +445,8 @@ async def apm10_task(rtc, state, apm_sensor, sd):
                     total_pm10 / n,
                 ]
             conc_to_aqi({"PM2_5": state.apm[1], "PM10": state.apm[2]}, state.apm_aqi_buf)
-            state.last_apm_ts = rtc_tup(rtc)
-            state.heartbeat = time.ticks_ms()   # <<-- APM10 task success heartbeat
+            state.last_apm_ts = time.ticks_ms()
+            state.heartbeat = state.last_apm_ts   # <<-- APM10 task success heartbeat
 
         except Exception as e:
             sd.append_error("apm10_task_error", e, ts=rtc_tup(rtc))
@@ -663,7 +666,8 @@ async def button_lcd_task(state, lcd, button1_pin, button2_pin):
     - DEBOUNCE_MS: simple debounce window
     - POLL_MS: main loop sleep
     """
-    POLL_MS = 80 # existing sleep
+    POLL_MS_ACTIVE = 80     # Fast polling when LCD is ON
+    POLL_MS_IDLE = 500      # Slow polling when LCD is OFF
     DISPLAY_TIMEOUT_MS = 15000  # milliseconds after last button press
     DEBOUNCE_MS = 20
     TOTAL_PAGES = 5 # total number of pages
@@ -727,7 +731,11 @@ async def button_lcd_task(state, lcd, button1_pin, button2_pin):
 
         last_level1 = level1
         last_level2 = level2
-        await asyncio.sleep_ms(POLL_MS)
+        
+        if lcd_on:
+            await asyncio.sleep_ms(POLL_MS_ACTIVE)   # 80ms - responsive when user is interacting
+        else:
+            await asyncio.sleep_ms(POLL_MS_IDLE)     # 500ms - save power when idle
 
 
 # --------------------------------------------------------------------
