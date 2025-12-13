@@ -83,8 +83,4 @@ class SHT40:
         """
         Performs a reset on the SHT40 sensor.
         """
-        try:
-            self.sensor.reset()
-        except Exception as e:
-            if config.debug:
-                print(f"Error resetting the sensor: {e}")
+        self.sensor.reset()

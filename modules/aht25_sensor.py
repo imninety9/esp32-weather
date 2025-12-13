@@ -38,9 +38,5 @@ class AHT25:
         """
         Performs a reset on the AHT25 sensor.
         """
-        try:
-            self.sensor.reset()
-        except Exception as e:
-            if config.debug:
-                print("Error resetting the sensor: ", e)
+        self.sensor.reset()
 

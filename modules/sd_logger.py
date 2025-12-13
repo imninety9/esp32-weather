@@ -201,9 +201,9 @@ class SDLogger:
     
     # ----------------- Error log (size rotate + retention) -----------------
     def _should_log_error(self, key, min_interval):
-        now = time.time()
+        now = time.ticks_ms()
         last = self._last_error_times.get(key)
-        if last and (now - last) < min_interval:
+        if last and time.ticks_diff(now, last) < min_interval:
             return False
         self._last_error_times[key] = now
         return True
@@ -307,7 +307,7 @@ class SDLogger:
         key: short string identifying error class (e.g. "wifi_fail", "mqtt_fail")
         message: free text (short)
         ts: timestamp tuple (Y, M, D, HH, MM, SS, ...) marking the error timing
-        min_interval: seconds minimum between logs of same error key
+        min_interval: milliseconds minimum between logs of same error key
         force: bypass throttling if True
         """
         if not self.error_path:

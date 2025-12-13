@@ -46,9 +46,5 @@ class BMP280Driver:
         """
         Performs a reset on the BMP280 sensor.
         """
-        try:
-            self.sensor.reset()
-        except Exception as e:
-            if config.debug:
-                print("Error resetting the sensor: ", e)
+        self.sensor.reset()
 
