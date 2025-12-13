@@ -301,7 +301,7 @@ class SDLogger:
             # swallow any errors — cleanup is best-effort
             pass
         
-    def append_error(self, key, message, ts=None, min_interval=config.DEFAULT_ERROR_THROTTLE, force=False):
+    def append_error(self, key, message, ts=None, min_interval=config.DEFAULT_ERROR_THROTTLE_MS, force=False):
         """
         Append a short error record to SD (throttled).
         key: short string identifying error class (e.g. "wifi_fail", "mqtt_fail")
@@ -394,4 +394,5 @@ if __name__ == "__main__":
     except Exception as e:
         print("Error: ", e)
         
+
 
