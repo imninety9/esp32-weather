@@ -575,7 +575,7 @@ def _safe_val(val, default="--"):
     return val or default
 #---------------
     
-def draw_lcd_page(lcd, state, page):
+def draw_lcd_page(rtc, lcd, state, page):
     """
     Draw page 1, 2, 3, .. on the Nokia 5110 LCD (84x48).
     NOTE: Each text is 8x8 pixel by default [display size: 84x48 (x, y)]
@@ -612,14 +612,10 @@ def draw_lcd_page(lcd, state, page):
                 lcd.text("HB: --", 0, 24)
         except Exception:
             lcd.text("HB: ??", 0, 24)
-
-        # last sensor reading timestamp
-        ts = tup_to_iso(state.last_sensor_ts)
-        lcd.text("S:%s" % ts[-8:], 0, 32)  # hh:mm:ss
         
         # rtc time
-        #ts = tup_to_iso(rtc_tup(rtc=rtc))
-        #lcd.text("S:%s" % ts[-8:], 0, 40)  # hh:mm:ss
+        ts = tup_to_iso(rtc_tup(rtc=rtc))
+        lcd.text("T:%s" % ts[-8:], 0, 32)  # hh:mm:ss
         
         # reset cause
 
@@ -658,7 +654,7 @@ def draw_lcd_page(lcd, state, page):
     lcd.show() # show ddram on screen
 
 
-async def button_lcd_task(state, lcd, button1_pin, button2_pin):
+async def button_lcd_task(rtc, state, lcd, button1_pin, button2_pin):
     """
     Two-button Prev/Next navigation for pages.
     - button1_pin, button2_pin: machine.Pin objects (pull-ups; pressed == 0)
@@ -679,7 +675,7 @@ async def button_lcd_task(state, lcd, button1_pin, button2_pin):
     last_level2 = 1  # pull-up, 1 = not pressed
     
     # ---- turn LCD on at startup and show page 1 ----
-    draw_lcd_page(lcd, state, 1)   # show page 1 immediately
+    draw_lcd_page(rtc, lcd, state, 1)   # show page 1 immediately
     lcd_on = True
     last_press_time = time.ticks_ms()
     # --------------------------------------
@@ -703,7 +699,7 @@ async def button_lcd_task(state, lcd, button1_pin, button2_pin):
                     # advance page: 1->2->3->...->1
                     current_page = 1 if current_page == TOTAL_PAGES else current_page + 1
 
-                draw_lcd_page(lcd, state, current_page)
+                draw_lcd_page(rtc, lcd, state, current_page)
                 
         # PREV button edge: just pressed
         if level2 == 0 and last_level2 == 1:
@@ -720,7 +716,7 @@ async def button_lcd_task(state, lcd, button1_pin, button2_pin):
                     # go back page: 1<-2<-3...<-1
                     current_page = TOTAL_PAGES if current_page == 1 else current_page - 1
 
-                draw_lcd_page(lcd, state, current_page)
+                draw_lcd_page(rtc, lcd, state, current_page)
                 
         
         # auto-off
@@ -901,7 +897,7 @@ async def main():
     elif config.debug:
         print("APM10: not detected, skipping apm10_task") # task not created
     asyncio.create_task(sensor_and_log_task(rtc, state, sensors, sd))
-    asyncio.create_task(button_lcd_task(state, lcd, button1, button2))
+    asyncio.create_task(button_lcd_task(rtc, state, lcd, button1, button2))
     if config.debug_mem:
         asyncio.create_task(health_log_task(rtc, state, sd))
 
