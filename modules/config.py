@@ -2,8 +2,9 @@
 
 from micropython import const
 
-debug = True
-debug_mem = False
+debug = const(True)
+debug_mem = const(False)
+run_apm = const(True)
 
 # SENSOR UPDATE INTERVAL
 SENSOR_INTERVAL_SECS = const(300) # [interval between weather readings update]
@@ -142,5 +143,6 @@ DEFAULT_ERROR_THROTTLE_MS = const(3600000)        # milliseconds
 HARD_WDT_TIMEOUT_MS = const(120000) # 120 s (keep it significantly larger than the largest blocking window in the code)
 SOFT_WDT_TIMEOUT_MS = const(1200000) # 20 min
 HARD_WDT_FEED_INTERVAL_MS = const(20000)
+
 
 
