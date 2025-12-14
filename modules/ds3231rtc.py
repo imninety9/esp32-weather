@@ -1,6 +1,6 @@
 # ds3231 rtc
 
-from ds3231_gen import *
+import ds3231_gen
 import config
 
 class ds3231:
@@ -14,7 +14,7 @@ class ds3231:
         :param alarmPIN_address: GPIO pin object connected to alarm
         """
         try:            
-            self.d = DS3231(i2c)
+            self.d = ds3231_gen.DS3231(i2c)
             self.alarm = [self.d.alarm1, self.d.alarm2] # ds3231 has two alarms
             # variiables to track, if an alarm is enabled (i.e. sending interrupts to the INT/SQW pin) or not
             self.alarm1 = False
@@ -62,6 +62,7 @@ class ds3231:
 # Example Usage
 if __name__ == "__main__":
     try:
+        import time
         from machine import I2C, Pin
         # Initialize i2c bus and alarm pin
         i2c = I2C(0, scl=Pin(config.sclPIN), sda=Pin(config.sdaPIN), freq=100000)

@@ -5,13 +5,15 @@ class Sensors:
      
     def __init__(self, i2c=None,
                  softi2c=None,
-                 onewirePin=None):
+                 onewirePin=None,
+                 run_apm=False):
         """
         Initializes all the sensors.
 
         :param i2c: I2C bus object
         :param softi2c: Soft I2C bus object
         :param onewirePin: GPIO Pin object for 1-wire communication
+        :param run_apm: should initialize apm10 sensor or not
         """     
         self.aht25 = None
         self.bmp280 = None
@@ -30,11 +32,12 @@ class Sensors:
                 self.bmp280 = BMP280Driver(i2c, i2c_address=0x76)
             except:
                 self.bmp280 = None
-            try:
-                from apm10_sensor_i2c import APM10Driver # lazy import
-                self.apm = APM10Driver(i2c, i2c_address=0x08)
-            except:
-                self.apm = None
+            if run_apm:
+                try:
+                    from apm10_sensor_i2c import APM10Driver # lazy import
+                    self.apm = APM10Driver(i2c, i2c_address=0x08)
+                except:
+                    self.apm = None
         if softi2c is not None:
             try:
                 from sht40_sensor import SHT40 # lazy import

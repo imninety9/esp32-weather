@@ -2,7 +2,7 @@
 
 import os
 import time
-from machine import SDCard
+import machine
 
 import config
 
@@ -25,7 +25,7 @@ class SDLogger:
                  debug=config.debug):
         try:
             # Initialize SD card object (using built-in SDCard class)
-            self.sd = SDCard(slot=2, sck=spi_pin_sck, miso=spi_pin_miso, mosi=spi_pin_mosi, cs=spi_pin_cs, freq=10000000)
+            self.sd = machine.SDCard(slot=2, sck=spi_pin_sck, miso=spi_pin_miso, mosi=spi_pin_mosi, cs=spi_pin_cs, freq=10000000)
             # Mount the SD card
             self.vfs = os.VfsFat(self.sd)
             self.sd_mount_point = sd_mount_point
@@ -186,7 +186,7 @@ class SDLogger:
             with open(self.data_path, 'a') as f:
                 f.write(row)
                 self._rows_since_flush += 1
-                if self._rows_since_flush >= 10: # flush every N rows
+                if self._rows_since_flush >= 12: # flush every N rows
                     # we are implementing flush, os.sync to ensure file does not get corrupted if power outage during file I/O
                     f.flush()
                     self._safe_sync()
@@ -346,7 +346,7 @@ class SDLogger:
         try:
             if not self._exists(self.health_path):
                 with open(self.health_path, "a") as f:
-                    f.write("timestamp,uptime_s,mem_free,mem_alloc\n")
+                    f.write("timestamp,uptime,mem_free,mem_alloc\n")
         except Exception as e:
             if config.debug:
                 print("ensure_health_header error:", e)
