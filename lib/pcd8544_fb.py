@@ -26,7 +26,7 @@ SOFTWARE.
 
 from micropython import const
 from ustruct import pack
-from utime import sleep_us
+import time
 import framebuf
 
 # Function set 0010 0xxx
@@ -102,11 +102,11 @@ class PCD8544_FB(framebuf.FrameBuffer):
 		# issue reset impulse to reset the display
 		# you need to call power_on() or init() to resume
 		self.rst(1)
-		sleep_us(100)
+		time.sleep_us(100)
 		self.rst(0)
-		sleep_us(100) # reset impulse has to be >100 ns and <100 ms
+		time.sleep_us(100) # reset impulse has to be >100 ns and <100 ms
 		self.rst(1)
-		sleep_us(100)
+		time.sleep_us(100)
 
 	def power_on(self):
 		self.cs(1)

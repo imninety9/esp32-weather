@@ -14,7 +14,7 @@ MicroPython Driver fot the Sensirion Temperature and Humidity SHT40, SHT41 and S
 """
 
 import time
-import struct
+from ustruct import unpack_from
 from micropython import const
 
 try:
@@ -157,7 +157,7 @@ class SHT4X:
         time.sleep(0.2)
         self._i2c.readfrom_into(self._address, self._data)
 
-        temperature, temp_crc, humidity, humidity_crc = struct.unpack_from(
+        temperature, temp_crc, humidity, humidity_crc = unpack_from(
             ">HBHB", self._data
         )
 
