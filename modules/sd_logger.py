@@ -6,6 +6,12 @@ import machine
 
 import config
 
+
+_ISO_FMT = config.ISO_FMT
+_CSV_FILEDS = config.CSV_FILEDS
+_ERROR_HEADER = "type,timestamp,key,message\n"
+_HEALTH_HEADER = "timestamp,uptime,mem_free,mem_alloc\n"
+
 class SDLogger:
     __slots__ = ("sd", "vfs", "sd_mount_point",
                  "debug",
@@ -13,7 +19,7 @@ class SDLogger:
                  "error_row_limit", "error_retention", "error_avg_row_len",
                  "_current_date", "_error_row_count",
                  "_last_error_times", "_rows_since_flush")
-    
+        
     def __init__(self, spi_pin_miso, spi_pin_mosi, spi_pin_sck, spi_pin_cs,
                  sd_mount_point=config.SD_MOUNT_POINT,
                  data_path=config.DEFAULT_DATA_PATH,
@@ -100,7 +106,7 @@ class SDLogger:
     
     def _iso_from_tup(self, t):
         """Return 'YYYY-MM-DD HH:MM:SS' from time tuple."""
-        return "%04d-%02d-%02d %02d:%02d:%02d" % (t[0], t[1], t[2], t[3], t[4], t[5])
+        return _ISO_FMT % (t[0], t[1], t[2], t[3], t[4], t[5])
     
     def _now_str_from_tup(self, t):
         """Return compact string YYYYMMDD_HHMMSS from tuple (for filenames)."""
@@ -133,7 +139,7 @@ class SDLogger:
             
         if self._current_date is None: # data file does not exist
             # create file
-            self.ensure_header(config.csv_fields)
+            self.ensure_header(_CSV_FILEDS)
             self._current_date = date
             return # no rotation needed
         if date != self._current_date: # if data file exists but is older (inetger comparision)
@@ -143,7 +149,7 @@ class SDLogger:
                 if self._exists(self.data_path):
                     os.rename(self.data_path, archived)
                 # create new file
-                self.ensure_header(config.csv_fields)
+                self.ensure_header(_CSV_FILEDS)
             except Exception:
                 # swallow: rotation is best-effort
                 pass
@@ -157,7 +163,7 @@ class SDLogger:
         try:
             if not self._exists(self.data_path):
                 with open(self.data_path, 'w') as f:
-                    f.write(','.join(fieldnames) + '\n')
+                    f.write(fieldnames)
         except OSError as e:
             if self.debug:
                 print("SD ensure_header error:", e)
@@ -227,7 +233,7 @@ class SDLogger:
                 #--- create error file with headers, and then return; no rotation needed ---
                 try:
                     with open(self.error_path, "a") as f:
-                        f.write("type,timestamp,key,message\n")
+                        f.write(_ERROR_HEADER)
                 except Exception:
                     # Optionally: mark a flag so the rest of the code stops trying to log
                     self.error_path = None
@@ -245,7 +251,7 @@ class SDLogger:
             # create new error file with headers
             try:
                 with open(self.error_path, "a") as f:
-                    f.write("type,timestamp,key,message\n")
+                    f.write(_ERROR_HEADER)
             except Exception:
                 # Optionally: mark a flag so the rest of the code stops trying to log
                 self.error_path = None
@@ -264,7 +270,7 @@ class SDLogger:
         try:
             dirpath, basename = os.path.split(self.error_path)
             if not dirpath:
-                dirpath = self.sd_mount_point if hasattr(self, "sd_mount_point") and os.path.exists(self.sd_mount_point) else "."
+                dirpath = self.sd_mount_point or "."
                 
             candidates = []
             # rotated files use pattern: <basename>.<stamp>.log  (e.g. errors.log.20251125_123045.log)
@@ -301,7 +307,7 @@ class SDLogger:
             # swallow any errors — cleanup is best-effort
             pass
         
-    def append_error(self, key, message, ts=None, min_interval=config.DEFAULT_ERROR_THROTTLE_MS, force=False):
+    def append_error(self, key, message, ts, min_interval=config.DEFAULT_ERROR_THROTTLE_MS, force=False):
         """
         Append a short error record to SD (throttled).
         key: short string identifying error class (e.g. "wifi_fail", "mqtt_fail")
@@ -346,9 +352,9 @@ class SDLogger:
         try:
             if not self._exists(self.health_path):
                 with open(self.health_path, "a") as f:
-                    f.write("timestamp,uptime,mem_free,mem_alloc\n")
+                    f.write(_HEALTH_HEADER)
         except Exception as e:
-            if config.debug:
+            if self.debug:
                 print("ensure_health_header error:", e)
             # Optionally: mark a flag so the rest of the code stops trying to log
             self.health_path = None
