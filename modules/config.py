@@ -108,15 +108,15 @@ LAST_WILL_MESSAGE = b"ESP32 disconnected unexpectedly!"
 
 
 # Misc
-csv_fields = ["timestamp",
-              "bmp_temp","bmp_press",
-              "aht_temp","aht_hum",
-              "ds18b20_temp",
-              "sht_temp","sht_hum",
-              "pm1_0", "pm2_5", "pm10",
-              "owm_temp","owm_temp_feels_like","owm_hum","owm_press",
-              "owm_pm2_5","owm_pm10","owm_no2"
-              ]
+CSV_FILEDS = """timestamp,
+                bmp_temp,bmp_press,
+                aht_temp,aht_hum,
+                ds18b20_temp,
+                sht_temp,sht_hum,
+                pm1_0,pm2_5,pm10,
+                owm_temp,owm_temp_feels_like,owm_hum,owm_press,
+                owm_pm2_5,owm_pm10,owm_no2
+                \n"""
 
 
 # wifi, mqtt backoff
@@ -143,6 +143,11 @@ DEFAULT_ERROR_THROTTLE_MS = const(3600000)        # milliseconds
 HARD_WDT_TIMEOUT_MS = const(120000) # 120 s (keep it significantly larger than the largest blocking window in the code)
 SOFT_WDT_TIMEOUT_MS = const(1200000) # 20 min
 HARD_WDT_FEED_INTERVAL_MS = const(20000)
+SOFT_WDT_CHECK_INTERVAL_MS = const(300000) # 5 min
+
+
+# string formats
+ISO_FMT = "%04d-%02d-%02d %02d:%02d:%02d"
 
 
 
