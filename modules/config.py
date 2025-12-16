@@ -8,9 +8,11 @@ run_apm = const(True)
 
 # SENSOR UPDATE INTERVAL
 SENSOR_INTERVAL_SECS = const(300) # [interval between weather readings update]
-OWM_FETCH_INTERVAL_SECS = const(600)
+OWM_WEATHER_FETCH_INTERVAL_SECS = const(600)
+OWM_AQI_FETCH_INTERVAL_SECS = const(3600) # 1 hr
 APM10_INTERVAL_SECS = const(3600)
-HEALTH_LOG_INTERVAL_SECS = const(30)
+HEALTH_LOG_INTERVAL_SECS = const(120)
+WIFI_TASK_INTERVAL_SECS = const(120)
 
 # WIFI PARAMETERS
 # List of WiFi networks with priorities (higher the better) [pre-sorted]
@@ -133,6 +135,7 @@ WIFI_CONNECT_TIMEOUT = const(10)  # secs per attempt
 DEFAULT_DATA_PATH = "/sd/weather.csv"
 DEFAULT_ERROR_PATH = "/sd/errors.log"
 DEFAULT_HEALTH_PATH = "/sd/health.csv" # Health log (uptime, memory)
+FLUSH_ROW_LIMIT = const(12) # flush every N rows
 DEFAULT_ERROR_ROW_LIMIT = const(500)  #
 ERROR_AVG_ROW = const(60) # bytes
 DEFAULT_ERROR_RETENTION = const(5) # number of files
@@ -142,12 +145,32 @@ DEFAULT_ERROR_THROTTLE_MS = const(3600000)        # milliseconds
 # watchdog
 HARD_WDT_TIMEOUT_MS = const(120000) # 120 s (keep it significantly larger than the largest blocking window in the code)
 SOFT_WDT_TIMEOUT_MS = const(1200000) # 20 min
-HARD_WDT_FEED_INTERVAL_MS = const(20000)
+HARD_WDT_FEED_INTERVAL_MS = const(30000) # 30 s
 SOFT_WDT_CHECK_INTERVAL_MS = const(300000) # 5 min
+
+
+# SHT40 Heater
+SHT_HIGH_RH_THRESHOLD = const(95) # 95% RH
+SHT_HIGH_RH_COUNT_THRESHOLD = const(5) # max readings allowed with 95% RH
+SHT_HEATER_CYCLES = const(2)
+
+
+# LCD
+POLL_MS_ACTIVE = const(80)     # Fast polling when LCD is ON
+POLL_MS_IDLE = const(500)      # Slow polling when LCD is OFF
+DISPLAY_TIMEOUT_MS = const(15000) # Auto-off after 15 seconds of the last button press
+DEBOUNCE_MS = const(20)  # Ignore fluke button presses
+TOTAL_PAGES = const(5) # total number of lcd pages
+MIN_REDRAW_MS = const(150) # ignore multiple presses within this period
 
 
 # string formats
 ISO_FMT = "%04d-%02d-%02d %02d:%02d:%02d"
+
+
+# min mem_free to run gc
+MIN_MEM_THRESHOLD = const(40000) # bytes
+
 
 
 
