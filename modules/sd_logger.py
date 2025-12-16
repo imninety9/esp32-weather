@@ -11,11 +11,15 @@ _ISO_FMT = config.ISO_FMT
 _CSV_FILEDS = config.CSV_FILEDS
 _ERROR_HEADER = "type,timestamp,key,message\n"
 _HEALTH_HEADER = "timestamp,uptime,mem_free,mem_alloc\n"
+_ERROR_FMT = "ERR,%s,%s,%s\n"
+_HEALTH_FMT = "%s,%s,%s,%s\n"
+_join = ",".join
 
 class SDLogger:
     __slots__ = ("sd", "vfs", "sd_mount_point",
                  "debug",
                  "data_path", "error_path", "health_path",
+                 "flush_row_limit",
                  "error_row_limit", "error_retention", "error_avg_row_len",
                  "_current_date", "_error_row_count",
                  "_last_error_times", "_rows_since_flush")
@@ -25,6 +29,7 @@ class SDLogger:
                  data_path=config.DEFAULT_DATA_PATH,
                  error_path=config.DEFAULT_ERROR_PATH,
                  health_path=config.DEFAULT_HEALTH_PATH,
+                 flush_row_limit = config.FLUSH_ROW_LIMIT,
                  error_row_limit=config.DEFAULT_ERROR_ROW_LIMIT,
                  error_retention=config.DEFAULT_ERROR_RETENTION,
                  error_avg_row_len=config.ERROR_AVG_ROW,
@@ -45,6 +50,7 @@ class SDLogger:
             self.data_path = data_path
             self.error_path = error_path
             self.health_path = health_path
+            self.flush_row_limit = flush_row_limit # flush every N rows
             self.error_row_limit = error_row_limit # rotate every 500 error lines (tune as you like)
             self.error_retention = error_retention
             self.error_avg_row_len = error_avg_row_len   # average size of one error row - ~ 60  bytes
@@ -184,7 +190,6 @@ class SDLogger:
         # rotate first (cheap)
         self.rotate_data_if_needed(ts)
         
-        _join = ",".join
         row = _join(vals) + "\n"
         try:
             if self.debug:
@@ -192,7 +197,7 @@ class SDLogger:
             with open(self.data_path, 'a') as f:
                 f.write(row)
                 self._rows_since_flush += 1
-                if self._rows_since_flush >= 12: # flush every N rows
+                if self._rows_since_flush >= self.flush_row_limit: # flush every N rows
                     # we are implementing flush, os.sync to ensure file does not get corrupted if power outage during file I/O
                     f.flush()
                     self._safe_sync()
@@ -328,7 +333,7 @@ class SDLogger:
         try:
             ts = self._iso_from_tup(ts)
             # keep row compact: "ERR",ts,key,msg,etc
-            row = "ERR,%s,%s,%s\n" % (ts, key, str(message))
+            row = _ERROR_FMT % (ts, key, message)
             # reuse append_row but write to self.error_path (quick helper)
             if self.debug:
                 print(row)
@@ -366,7 +371,7 @@ class SDLogger:
 
         try:
             ts = self._iso_from_tup(ts)
-            row = "%s,%s,%s,%s\n" % (ts, uptime, mem_free, mem_alloc)
+            row = _HEALTH_FMT % (ts, uptime, mem_free, mem_alloc)
             if self.debug:
                 print(row)
             with open(self.health_path, "a") as f:
