@@ -22,8 +22,6 @@ from owm import OWMClient
 from pcd8544_fb import PCD8544_FB
 
 
-_ISO_FMT = config.ISO_FMT
-
 rst_causes = {
     machine.PWRON_RESET: "PWRON RST", # when device first time starts up after being powered on
     machine.HARD_RESET: "HARD RST", # physical reset by a button or through power cycling
@@ -43,6 +41,7 @@ class State:
         "owm_weather", "owm_aqi", "apm",
         "last_sensor_ts", "last_owm_ts", "last_apm_ts",
         "wifi_ok", "mqtt_ok", "wlan", "mqtt_client",
+        "lcd_on", "current_page", "last_lcd_press",
         "apm_running",
         "sht_heater_mode", "sht_high_rh_count", "sht_heater_cycles_left",
         "heartbeat"
@@ -84,7 +83,12 @@ class State:
         self.wlan = None
         self.mqtt_client = None
         
-        # APM sensor notification
+        # LCD state
+        self.lcd_on = False
+        self.current_page = 1
+        self.last_lcd_press = 0
+        
+        # APM sensor state
         self.apm_running = False
         
         # sht40 heater mode
@@ -130,21 +134,23 @@ def rtc_tup(rtc=None):
     # fallback
     return time.localtime()
     
+# Pre-allocate format strings at module level
+_ISO_FMT = config.ISO_FMT
 def tup_to_iso(t):  
     """Convert time tuple (Y, M, D, H, M, S, ...) to 'YYYY-MM-DD hh:mm:ss'."""
     if not t:
         return "0000-00-00 00:00:00"
     return _ISO_FMT % (t[0], t[1], t[2], t[3], t[4], t[5])
 
-
+# Pre-allocate format strings at module level
+_FMT_2DEC = "%.2f" # precision is fixed at 2 decimal digits
 def format_value(value, default = ""):
     """
     Format values for CSV / MQTT.
-    precision is fixed at 2 decimal digits.
     """
     if value is None:
         return default
-    return str(value) if not isinstance(value, float) else "%.2f" % value
+    return str(value) if not isinstance(value, float) else _FMT_2DEC % value
 
 
 def format_uptime(boot_ticks, now_ticks=None):
@@ -154,10 +160,10 @@ def format_uptime(boot_ticks, now_ticks=None):
     if now_ticks is None:
         now_ticks = time.ticks_ms()
         
-    s = time.ticks_diff(now_ticks, boot_ticks) # s is in millisecond
-    days, s = divmod(s, 86400000)
-    hrs, s = divmod(s, 3600000)
-    mins, s = divmod(s, 60000)
+    s = time.ticks_diff(now_ticks, boot_ticks) // 1000
+    days, s = divmod(s, 86400)
+    hrs, s = divmod(s, 3600)
+    mins, s = divmod(s, 60)
     if days:
         return "%dd%02dh" % (days, hrs)
     return "%02d:%02d:%02d" % (hrs, mins, s)
@@ -297,15 +303,19 @@ def conc_to_aqi(concentrations):
 async def sensor_and_log_task(rtc, state, sensors, sd):
     """Read sensors every SENSOR_INTERVAL_SECS, build row, log to SD and publish MQTT."""
     interval = config.SENSOR_INTERVAL_SECS
+    mem_threshold = config.MIN_MEM_THRESHOLD
+    sht_rh_thresh = config.SHT_HIGH_RH_COUNT_THRESHOLD
+    sht_rh_cnt_thresh = config.SHT_HIGH_RH_COUNT_THRESHOLD
+    sht_heat_cyc = config.SHT_HEATER_CYCLES
 
     mqtt_feeds = config.feeds
     mqtt_msgs = [None]*9  # pre-allocating once at module top to avoid re-allocating new list each time
 
-    STATUS_FMT = "T:%s UP:%s iPM2.5:%s iPM10:%s oPM2.5:%s oPM10:%s"
+    _STATUS_FMT = "T:%s UP:%s iPM2.5:%s iPM10:%s oPM2.5:%s oPM10:%s"
     
     while True:
         try:
-            if gc.mem_free() < 40000:   # tune threshold
+            if gc.mem_free() < mem_threshold:
                 gc.collect()
 
             # 1. Read all local sensors (blocking but quick)
@@ -315,14 +325,14 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
             if not state.sht_heater_mode:
                 # NORMAL MODE
                 sht_rh = sensor_data[3][1] # sht_hum = sensor_data[3][1]
-                if sht_rh is not None and sht_rh >= 95:
+                if sht_rh is not None and sht_rh >= sht_rh_thresh:
                     state.sht_high_rh_count += 1
-                    if state.sht_high_rh_count >= 5:  # N consecutive high-RH readings
+                    if state.sht_high_rh_count >= sht_rh_cnt_thresh:  # N consecutive high-RH readings
                         try:
                             # switch SHT40 into heater measurement mode (20 mW, 0.1s)
                             sensors.sht40.set_mode(mode=9) # mode 9 is 20mW heater for 0.1s
                             state.sht_heater_mode = True
-                            state.sht_heater_cycles_left = 2  # M heater readings
+                            state.sht_heater_cycles_left = sht_heat_cyc  # M heater readings
                             if config.debug:
                                 print("SHT40: entering heater mode")
                         except Exception as e:
@@ -361,7 +371,7 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
                     mqtt_msgs[1] = row[2]   # bmp_press
                     mqtt_msgs[2] = row[3]  # aht_temp
                     mqtt_msgs[3] = row[4]  # aht_hum
-                    mqtt_msgs[4] = STATUS_FMT % (
+                    mqtt_msgs[4] = _STATUS_FMT % (
                                         row[5], format_uptime(state.boot_ticks, t),
                                         state.apm_aqi_buf["PM2_5"], state.apm_aqi_buf["PM10"],
                                         state.owm_aqi_buf["PM2_5"], state.owm_aqi_buf["PM10"]
@@ -375,13 +385,13 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
                 except Exception as e:
                     # Mark MQTT as broken so wifi_mqtt_task will reconnect later
                     state.mqtt_ok = False
-                    sd.append_error("mqtt_publish_fail", e, ts=ts)
+                    sd.append_error("mqtt_publish_fail", str(e), ts=ts)
             
             state.last_sensor_ts = t
             state.heartbeat = t # <<-- Sensor log task success heartbeat
             
         except Exception as e:
-            sd.append_error("sensor_and_log_task_error", e, ts=rtc_tup(rtc), min_interval=300)
+            sd.append_error("sensor_and_log_task_error", str(e), ts=rtc_tup(rtc), min_interval=300)
         
         # Sleep until next sample
         '''
@@ -393,16 +403,16 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
 
 async def owm_task(rtc, state, owm_client, sd):
     """Fetch OpenWeatherMap data every OWM_FETCH_INTERVAL_SECS when Wi-Fi is OK."""
-    interval = config.OWM_FETCH_INTERVAL_SECS
+    interval = config.OWM_WEATHER_FETCH_INTERVAL_SECS
     # fetch aqi each 60 minutes only
     aqi_count = 0
-    aqi_cycle = max(1, 3600 // interval)
+    aqi_cycle = max(1, config.OWM_AQI_FETCH_INTERVAL_SECS // interval)
     
     while True:
-        if state.apm_running:
+        # Wait for APM to finish if it's running
+        while state.apm_running:
             # Wait a short time and try again later. we use this tactic because this task is "blocking" and we want apm sensor to take regular measurements
             await asyncio.sleep(10)
-            continue
         
         # else go fetch OWM (with a short timeout)
         try:
@@ -432,7 +442,7 @@ async def owm_task(rtc, state, owm_client, sd):
                 state.last_owm_ts = t
                 state.heartbeat = t   # <<-- OWM task success heartbeat
         except Exception as e:
-            sd.append_error("owm_task_error", e, ts=rtc_tup(rtc))
+            sd.append_error("owm_task_error", str(e), ts=rtc_tup(rtc))
               
         await asyncio.sleep(interval)
 
@@ -495,7 +505,7 @@ async def apm10_task(rtc, state, apm_sensor, sd):
             state.heartbeat = t   # <<-- APM10 task success heartbeat
 
         except Exception as e:
-            sd.append_error("apm10_task_error", e, ts=rtc_tup(rtc))
+            sd.append_error("apm10_task_error", str(e), ts=rtc_tup(rtc))
         finally:
             # Ensure we exit measurement mode and clear running flag
             try:
@@ -513,6 +523,7 @@ async def wifi_mqtt_task(rtc, state, sd):
     - wifi_fail_count increments on Wi-Fi connect failures.
     - mqtt_fail_count increments on MQTT connect failures (only attempted when wifi_ok).
     """
+    interval = config.WIFI_TASK_INTERVAL_SECS
     WIFI_SSID = config.WIFI_SSID
     WIFI_PASS = config.WIFI_PASS
     WIFI_BASE_BACKOFF = getattr(config, "WIFI_BASE_BACKOFF", 30)   # seconds
@@ -545,7 +556,7 @@ async def wifi_mqtt_task(rtc, state, sd):
                     # Connection failed this cycle
                     state.wifi_ok = False # since, wifi connect failed
                     wifi_fail_count += 1
-                    sd.append_error("wifi_fail", e, ts=rtc_tup(rtc))
+                    sd.append_error("wifi_fail", str(e), ts=rtc_tup(rtc))
 
             # --- Try MQTT if Wi-Fi is OK and no client (blocking) ---
             if state.wifi_ok and not state.mqtt_client:
@@ -568,7 +579,7 @@ async def wifi_mqtt_task(rtc, state, sd):
                     state.mqtt_client = None
                     state.mqtt_ok = False
                     mqtt_fail_count += 1
-                    sd.append_error("mqtt_connect_fail", e, ts=rtc_tup(rtc))
+                    sd.append_error("mqtt_connect_fail", str(e), ts=rtc_tup(rtc))
 
             if not state.wifi_ok:
                 # if Wi-Fi is down, MQTT can't be up
@@ -576,7 +587,7 @@ async def wifi_mqtt_task(rtc, state, sd):
 
         except Exception as e:
             # Unexpected outer error — log, but keep loop alive
-            sd.append_error("wifi_mqtt_task_error", e, ts=rtc_tup(rtc))
+            sd.append_error("wifi_mqtt_task_error", str(e), ts=rtc_tup(rtc))
                  
         # BACKOFF
         # If Wi-Fi is not OK, wait wifi_wait. If Wi-Fi OK but MQTT failed, wait mqtt_wait;
@@ -586,7 +597,7 @@ async def wifi_mqtt_task(rtc, state, sd):
             wait = compute_backoff(MQTT_BASE_BACKOFF, mqtt_fail_count, MQTT_MAX_BACKOFF, BACKOFF_JITTER_PCT) # mqtt_wait
         else:
             # Everything OK — keep a low-frequency check (e.g., 30s)
-            wait = 120
+            wait = interval
 
         await asyncio.sleep(wait)
 
@@ -622,6 +633,7 @@ def draw_lcd_page(rtc, lcd, state, page):
     # PAGE 1: SYSTEM STATUS
     # -------------------------
     if page == 1:
+        now_ticks = time.ticks_ms()
         # Title
         lcd.text("Room Logger", 0, 0)
 
@@ -636,14 +648,14 @@ def draw_lcd_page(rtc, lcd, state, page):
         # UPTIME
         # Avoid "U:" + uptime concatenation
         lcd.text("U:", 0, 16)
-        lcd.text(format_uptime(state.boot_ticks), 16, 16)
+        lcd.text(format_uptime(state.boot_ticks, now_ticks), 16, 16)
 
         # HEARTBEAT
         try:
             hb = getattr(state, "heartbeat", None)
             lcd.text("HB:", 0, 24)
             if hb:
-                age = time.ticks_diff(time.ticks_ms(), state.heartbeat) // 1000
+                age = time.ticks_diff(now_ticks, state.heartbeat) // 1000
                 # if heartbeat younger than 120s show OK, else show seconds
                 if age <= 90:
                     lcd.text("OK", 24, 24)
@@ -759,24 +771,21 @@ async def button_lcd_task(rtc, state, lcd, button1_pin, button2_pin):
     - DEBOUNCE_MS: simple debounce window
     - POLL_MS: main loop sleep
     """
-    POLL_MS_ACTIVE = 80     # Fast polling when LCD is ON
-    POLL_MS_IDLE = 500      # Slow polling when LCD is OFF
-    DISPLAY_TIMEOUT_MS = 15000  # milliseconds after last button press
-    DEBOUNCE_MS = 20
-    TOTAL_PAGES = 5 # total number of pages
-    MIN_REDRAW_MS = 100
+    poll_ms_active = config.POLL_MS_ACTIVE     # Fast polling when LCD is ON
+    poll_ms_idle = config.POLL_MS_IDLE    # Slow polling when LCD is OFF
+    display_timeout_ms = config.DISPLAY_TIMEOUT_MS  # milliseconds after last button press
+    debounce_ms = config.DEBOUNCE_MS
+    total_pages = config.TOTAL_PAGES # total number of pages
+    min_redraw_ms = config.MIN_REDRAW_MS
 
-    lcd_on = False
-    current_page = 1
-    last_press_time = 0
     last_level1 = 1  # pull-up, 1 = not pressed
     last_level2 = 1  # pull-up, 1 = not pressed
     
     # ---- turn LCD on at startup and show page 1 ----
     lcd.power_on() # switch on the screen
     draw_lcd_page(rtc, lcd, state, 1)   # show page 1 immediately
-    lcd_on = True
-    last_press_time = time.ticks_ms()
+    state.lcd_on = True
+    state.last_lcd_press = time.ticks_ms()
     # --------------------------------------
     
     while True:
@@ -787,54 +796,54 @@ async def button_lcd_task(rtc, state, lcd, button1_pin, button2_pin):
         if level1 == 0 and last_level1 == 1:
             now = time.ticks_ms()
             # debounce
-            await asyncio.sleep_ms(DEBOUNCE_MS)
+            await asyncio.sleep_ms(debounce_ms)
             if button1_pin.value() == 0:
-                if time.ticks_diff(now, last_press_time) >= MIN_REDRAW_MS:
-                    last_press_time = now
+                if time.ticks_diff(now, state.last_lcd_press) >= min_redraw_ms:
+                    state.last_lcd_press = now
 
-                    if not lcd_on:
+                    if not state.lcd_on:
                         lcd.power_on() # switch on the screen
-                        lcd_on = True
-                        current_page = 1
+                        state.lcd_on = True
+                        state.current_page = 1
                     else:
                         # advance page: 1->2->3->...->1
-                        current_page = 1 if current_page == TOTAL_PAGES else current_page + 1
+                        state.current_page = 1 if state.current_page == total_pages else state.current_page + 1
 
-                    draw_lcd_page(rtc, lcd, state, current_page)
+                    draw_lcd_page(rtc, lcd, state, state.current_page)
                 
         # PREV button edge: just pressed
-        if level2 == 0 and last_level2 == 1:
+        elif level2 == 0 and last_level2 == 1:
             now = time.ticks_ms()
             # debounce
-            await asyncio.sleep_ms(DEBOUNCE_MS)
+            await asyncio.sleep_ms(debounce_ms)
             if button2_pin.value() == 0:
-                if time.ticks_diff(now, last_press_time) >= MIN_REDRAW_MS:
-                    last_press_time = now
+                if time.ticks_diff(now, state.last_lcd_press) >= min_redraw_ms:
+                    state.last_lcd_press = now
 
-                    if not lcd_on:
+                    if not state.lcd_on:
                         lcd.power_on() # switch on the screen
-                        lcd_on = True
-                        current_page = 1
+                        state.lcd_on = True
+                        state.current_page = 1
                     else:
                         # go back page: 1<-2<-3...<-1
-                        current_page = TOTAL_PAGES if current_page == 1 else current_page - 1
+                        state.current_page = total_pages if state.current_page == 1 else state.current_page - 1
 
-                    draw_lcd_page(rtc, lcd, state, current_page)
+                    draw_lcd_page(rtc, lcd, state, state.current_page)
                 
         
         # auto-off
-        if lcd_on and (time.ticks_diff(time.ticks_ms(), last_press_time) >= DISPLAY_TIMEOUT_MS):
+        if state.lcd_on and (time.ticks_diff(time.ticks_ms(), state.last_lcd_press) >= display_timeout_ms):
             lcd.clear()            
             lcd.power_off() # save power by switching the screen off
-            lcd_on = False
+            state.lcd_on = False
 
         last_level1 = level1
         last_level2 = level2
         
-        if lcd_on:
-            await asyncio.sleep_ms(POLL_MS_ACTIVE)   # 80ms - responsive when user is interacting
+        if state.lcd_on:
+            await asyncio.sleep_ms(poll_ms_active)   # 80ms - responsive when user is interacting
         else:
-            await asyncio.sleep_ms(POLL_MS_IDLE)     # 500ms - save power when idle
+            await asyncio.sleep_ms(poll_ms_idle)     # 500ms - save power when idle
 
 
 # --------------------------------------------------------------------
@@ -914,14 +923,14 @@ async def health_log_task(rtc, state, sd):
 
     while True:
         try:
-            uptime = format_uptime(state.boot_ticks)
+            uptime = format_uptime(state.boot_ticks, time.ticks_ms())
             mem_free = gc.mem_free()
             mem_alloc = gc.mem_alloc()
             #if mem_free < 20_000: print("Memory low:", mem_free)
             #print(uptime, mem_free, mem_alloc)
             sd.append_health(rtc_tup(rtc), uptime, mem_free, mem_alloc)
         except Exception as e:
-            sd.append_error("health_log_task_error", e, ts=rtc_tup(rtc))
+            sd.append_error("health_log_task_error", str(e), ts=rtc_tup(rtc))
 
         await asyncio.sleep(interval)
 
@@ -1048,6 +1057,8 @@ async def main():
 # MicroPython uasyncio entry point
 try:
     asyncio.run(main())
+except KeyboardInterrupt:  # Trapping this is optional
+    print('Keyboard Interrupted')  # or pass
 finally:
     # Clean up event loop on soft reboot or crash or keyboard interrupt
     # NOTE: MicroPython can only have ONE active event loop at a time. So unless
