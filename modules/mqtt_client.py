@@ -23,6 +23,15 @@ class MQTTClientSimple:
         except Exception as e:
             raise e # raise so that main code knows that mqtt connection failed
     
+    # Disconnect mqtt client
+    def _disconnect(self):
+        """Disconnect from MQTT broker"""
+        try:
+            self.client.disconnect()
+        except Exception as e:
+            if config.debug:
+                print("MQTT disconnection error: ", e)
+        
     # Publish data to mqtt server
     def publish_data(self, feeds, msgs):
         """
