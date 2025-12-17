@@ -156,12 +156,9 @@ SHT_HEATER_CYCLES = const(2)
 
 
 # LCD
-POLL_MS_ACTIVE = const(80)     # Fast polling when LCD is ON
-POLL_MS_IDLE = const(500)      # Slow polling when LCD is OFF
 DISPLAY_TIMEOUT_MS = const(15000) # Auto-off after 15 seconds of the last button press
-DEBOUNCE_MS = const(20)  # Ignore fluke button presses
+DEBOUNCE_MS = const(200)  # Ignore multiple presses within 200ms
 TOTAL_PAGES = const(5) # total number of lcd pages
-MIN_REDRAW_MS = const(150) # ignore multiple presses within this period
 
 
 # string formats
@@ -170,6 +167,7 @@ ISO_FMT = "%04d-%02d-%02d %02d:%02d:%02d"
 
 # min mem_free to run gc
 MIN_MEM_THRESHOLD = const(40000) # bytes
+
 
 
 
