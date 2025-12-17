@@ -21,6 +21,7 @@ from mqtt_client import MQTTClientSimple
 from owm import OWMClient
 from pcd8544_fb import PCD8544_FB
 
+debug = config.debug
 
 rst_causes = {
     machine.PWRON_RESET: "PWRON RST", # when device first time starts up after being powered on
@@ -42,6 +43,7 @@ class State:
         "last_sensor_ts", "last_owm_ts", "last_apm_ts",
         "wifi_ok", "mqtt_ok", "wlan", "mqtt_client",
         "lcd_on", "current_page", "last_lcd_press",
+        "button_pressed", "button_flag", "timeout_event",
         "apm_running",
         "sht_heater_mode", "sht_high_rh_count", "sht_heater_cycles_left",
         "heartbeat"
@@ -69,8 +71,8 @@ class State:
         self.owm_aqi = [""] * 3  # pm2.5, pm10, no2
         self.apm = [""] * 3  # pm1, pm2_5, pm10
         # aqi buffers
-        self.owm_aqi_buf = {"PM2_5": "", "PM10": "", "NO2": ""}
-        self.apm_aqi_buf = {"PM2_5": "", "PM10": ""}
+        self.apm_aqi_buf = [""] * 2    # PM2.5, PM10
+        self.owm_aqi_buf = [""] * 3    # PM2.5, PM10, NO2
 
         # Timestamps
         self.last_sensor_ts = None
@@ -87,9 +89,13 @@ class State:
         self.lcd_on = False
         self.current_page = 1
         self.last_lcd_press = 0
+        self.button_pressed = None # Which button was pressed (1, 2, or None) 
+        self.button_flag = asyncio.ThreadSafeFlag() # asyncio.ThreadSafeFlag for button press (Use ThreadSafeFlag for IRQs - its safer)
+        self.timeout_event = asyncio.Event() # asyncio.Event for LCD timeout (it is set from a Task, not an ISR - so safe)
         
         # APM sensor state
         self.apm_running = False
+        #self.apm_evt = asyncio.Event() # trigger one APM run on long button press, etc
         
         # sht40 heater mode
         self.sht_heater_mode = False
@@ -122,10 +128,10 @@ def sync_machine_rtc_from_ds3231(rtc):
         r = machine.RTC()
         r.datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0))
     except Exception as e:
-        if config.debug:
+        if debug:
             print("sync_machine_rtc_from_ds3231 error:", e)
             
-def rtc_tup(rtc=None):
+def rtc_tup(rtc):
     """Return (Y, M, D, H, M, S, ...) tuple using ds3231.get_time() if available."""
     if rtc is not None:
         t = rtc.get_time()
@@ -215,84 +221,93 @@ def compute_backoff(base, fail_count, max_backoff, jitter_pct=15):
 
 
 # particulate conc to AQI
-LOW_BREAKPOINTS_AQI = (0, 51, 101, 201, 301, 401)
-LOW_BREAKPOINTS = {
-                   "PM10": (0, 51, 101, 251, 351, 431),
-                   "PM2_5": (0, 31, 61, 91, 121, 251),
-                   "NO2": (0, 41, 81, 181, 281, 401),
-                   "O3": (0, 51, 101, 169, 209, 749),
-                   "CO": (0.0, 1.1, 2.1, 10.1, 17.1, 34.1),
-                   "SO2": (0, 41, 81, 381, 801, 1601),
-                   "NH3": (0, 201, 401, 801, 1201, 1801),
-                   "Pb": (0.0, 0.6, 1.1, 2.1, 3.1, 3.6)
-                   }
-HIGH_BREAKPOINTS_AQI = (50, 100, 200, 300, 400, 500)
-HIGH_BREAKPOINTS = {
-                    "PM10": (50, 100, 250, 350, 430),
-                    "PM2_5": (30, 60, 90, 120, 250),
-                    "NO2": (40, 80, 180, 280, 400),
-                    "O3": (50, 100, 168, 208, 748),
-                    "CO": (1.0, 2.0, 10.0, 17.0, 34.0),
-                    "SO2": (40, 80, 380, 800, 1600),
-                    "NH3": (200, 400, 800, 1200, 1800),
-                    "Pb": (0.5, 1.0, 2.0, 3.0, 3.5)
-                    }
-_FLOAT_ONE_DEC_KEYS = ("CO", "Pb")
-
-def conc_to_aqi(concentrations):
+# AQI index LOW and HIGH BREAKPOINTS
+AQI_LO = (0, 51, 101, 201, 301, 401)
+AQI_HI = (50, 100, 200, 300, 400, 500)
+# Pollutant LOW and HIGH BREAKPOINTS
+# Descriptor tuple: (name, low_breakpoints, high_breakpoints, decimals)
+PM2_5 = (
+    "PM2.5",
+    (0, 31, 61, 91, 121, 251),
+    (30, 60, 90, 120, 250),
+    0,
+)
+PM10 = (
+    "PM10",
+    (0, 51, 101, 251, 351, 431),
+    (50, 100, 250, 350, 430),
+    0,
+)
+NO2 = (
+    "NO2",
+    (0, 41, 81, 181, 281, 401),
+    (40, 80, 180, 280, 400),
+    0,
+)
+O3 = (
+    "O3",
+    (0, 51, 101, 169, 209, 749),
+    (50, 100, 168, 208, 748),
+    0,
+)
+CO = (
+    "CO",
+    (0.0, 1.1, 2.1, 10.1, 17.1, 34.1),
+    (1.0, 2.0, 10.0, 17.0, 34.0),
+    1,
+)
+SO2 = (
+    "SO2",
+    (0, 41, 81, 381, 801, 1601),
+    (40, 80, 380, 800, 1600),
+    0,
+)
+NH3 = (
+    "NH3",
+    (0, 201, 401, 801, 1201, 1801),
+    (200, 400, 800, 1200, 1800),
+    0,
+)
+Pb = (
+    "Pb",
+    (0.0, 0.6, 1.1, 2.1, 3.1, 3.6),
+    (0.5, 1.0, 2.0, 3.0, 3.5),
+    1,
+)
+                   
+def conc_to_aqi(pollutant_desc, concentration):
     """
-    concentrations: dict { pollutant: concentration }
-    Updates this concentrations dictionary as { pollutant: aqi_value } [dict is mutable]
+    pollutant_desc: pollutant descriptor from above tuples
+    concentrations: pollutant's concentration
+    return aqi corresponding to pollutant concentration
     """
-    for key, value in concentrations.items():
-        if value is None or value < 0:
-            concentrations[key] = format_value(None)
-            continue
-        
-        # Get breakpoints (avoid repeated dict lookups)
-        try:
-            low_bp = LOW_BREAKPOINTS[key]
-            high_bp = HIGH_BREAKPOINTS[key]
-        except KeyError: # Invalid Key
-            concentrations[key] = format_value(None)
-            continue
-        
-        # rounding style: 1 decimal place for CO/Pb, nearest int for others
-        if key in _FLOAT_ONE_DEC_KEYS:
-            value = round(value, 1)
-        else:
-            value = round(value)
-        
-        # Find the breakpoint interval
-        cat_idx = -1
-        # iterate with index so we can use the same index for AQI arrays
-        for i, hi in enumerate(high_bp):
-            if value <= hi:
-                cat_idx = i
-                break
+    if concentration is None or concentration < 0:
+        return None
 
-        if cat_idx == -1:
-            # above last breakpoint -> clamp to max AQI
-            concentrations[key] = format_value(500)
-            continue
-        
-        # linear interpolation:
-        # I = ((I_hi - I_lo)/(C_hi - C_lo)) * (C - C_lo) + I_lo
-        c_lo = low_bp[cat_idx]
-        c_hi = high_bp[cat_idx]
-        i_lo = LOW_BREAKPOINTS_AQI[cat_idx]
-        i_hi = HIGH_BREAKPOINTS_AQI[cat_idx]
+    _, low_bp, high_bp, decimals = pollutant_desc
 
-        # avoid division by zero if breakpoints are malformed
-        if c_hi == c_lo:
-            concentrations[key] = format_value(i_hi)
-        else:
-            concentrations[key] = format_value(
-                round(
-                ((i_hi - i_lo) * (value - c_lo) / (c_hi - c_lo))
+    # rounding style: 1 decimal place for CO/Pb, nearest int for others
+    if decimals:
+        c = round(concentration, 1)
+    else:
+        c = round(concentration)
+
+    # Find the breakpoint interval
+    for i, hi in enumerate(high_bp):
+        if c <= hi:
+            c_lo = low_bp[i]
+            c_hi = high_bp[i]
+            i_lo = AQI_LO[i]
+            i_hi = AQI_HI[i]
+
+            # linear interpolation
+            # I = ((I_hi - I_lo)/(C_hi - C_lo)) * (C - C_lo) + I_lo
+            return int(
+                (i_hi - i_lo) * (c - c_lo) / (c_hi - c_lo)
                 + i_lo
                 )
-                )
+    # above last breakpoint -> clamp to max AQI
+    return 500
                 
 
 
@@ -333,10 +348,10 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
                             sensors.sht40.set_mode(mode=9) # mode 9 is 20mW heater for 0.1s
                             state.sht_heater_mode = True
                             state.sht_heater_cycles_left = sht_heat_cyc  # M heater readings
-                            if config.debug:
+                            if debug:
                                 print("SHT40: entering heater mode")
                         except Exception as e:
-                            if config.debug:
+                            if debug:
                                 print("SHT40 heater mode error:", e)
                         state.sht_high_rh_count = 0 # reset counter
                 else:
@@ -348,10 +363,10 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
                     try:
                         sensors.sht40.set_mode(mode=1) # mode 1 is normal mode
                         state.sht_heater_mode = False
-                        if config.debug:
+                        if debug:
                             print("SHT40: back to normal mode")
                     except Exception as e:
-                        if config.debug:
+                        if debug:
                             print("SHT40 normal mode error:", e)
 
             # 2. Timestamp from RTC (DS3231) and now_ticks
@@ -373,8 +388,8 @@ async def sensor_and_log_task(rtc, state, sensors, sd):
                     mqtt_msgs[3] = row[4]  # aht_hum
                     mqtt_msgs[4] = _STATUS_FMT % (
                                         row[5], format_uptime(state.boot_ticks, t),
-                                        state.apm_aqi_buf["PM2_5"], state.apm_aqi_buf["PM10"],
-                                        state.owm_aqi_buf["PM2_5"], state.owm_aqi_buf["PM10"]
+                                        state.apm_aqi_buf[0], state.apm_aqi_buf[1],
+                                        state.owm_aqi_buf[0], state.owm_aqi_buf[1]
                                         ) # ds18b20_temp, uptime, indoor aqi, outdoor aqi
                     mqtt_msgs[5] = row[11]  # owm_temp
                     mqtt_msgs[6] = row[12]  # owm_feels_like
@@ -431,10 +446,9 @@ async def owm_task(rtc, state, owm_client, sd):
                     state.owm_aqi[1] = format_value(aq[1])
                     state.owm_aqi[2] = format_value(aq[2])
                     
-                    state.owm_aqi_buf["PM2_5"] = aq[0]
-                    state.owm_aqi_buf["PM10"] = aq[1]
-                    state.owm_aqi_buf["NO2"] = aq[2]
-                    conc_to_aqi(state.owm_aqi_buf)
+                    state.owm_aqi_buf[0] = format_value(conc_to_aqi(PM2_5, aq[0]))
+                    state.owm_aqi_buf[1] = format_value(conc_to_aqi(PM10, aq[1]))
+                    state.owm_aqi_buf[2] = format_value(conc_to_aqi(NO2, aq[2]))
                 
                 aqi_count = (aqi_count + 1) % aqi_cycle
                 
@@ -457,11 +471,22 @@ async def apm10_task(rtc, state, apm_sensor, sd):
     
     # If the sensor isn't present, exit the task cleanly without looping it
     if apm_sensor is None:
-        if config.debug:
+        if debug:
             print("APM10: sensor not available, apm10_task exiting")
         return
     
     while True:
+        '''
+        # wait for either:
+        # - normal interval
+        # - forced event
+        try:
+            await asyncio.wait_for(state.apm_evt.wait(), interval)
+            state.apm_evt.clear()   # forced run
+        except asyncio.TimeoutError:
+            pass                    # normal scheduled run
+        '''
+        
         # Mark APM as running for UI
         state.apm_running = True
         
@@ -471,7 +496,7 @@ async def apm10_task(rtc, state, apm_sensor, sd):
             await asyncio.sleep(STABILIZATION_SECS) # warm-up for stabilization
             
             n = 0
-            pm1 = pm25 = pm10 = 0.0
+            pm1 = pm2_5 = pm10 = 0.0
             # Take ~3 samples, keep last 2; sensor min interval ~1s
             for i in range(3):
                 data = apm_sensor.read_measurements()  # (pm1, pm2_5, pm10) or (None,...)
@@ -479,26 +504,25 @@ async def apm10_task(rtc, state, apm_sensor, sd):
                     # drop oldest reading
                     if i > 0:
                         pm1 += data[0]
-                        pm25 += data[1]
+                        pm2_5 += data[1]
                         pm10 += data[2]
                         n += 1
                 await asyncio.sleep(1.2) # APM10 min 1s interval
             
             if n == 0: # avoid division by zero
-                pm1 = pm25 = pm10 = None
+                pm1 = pm2_5 = pm10 = None
             else:
                 inv_n = 1.0 / n
                 pm1  *= inv_n
-                pm25 *= inv_n
+                pm2_5 *= inv_n
                 pm10 *= inv_n 
             
             state.apm[0] = format_value(pm1)
-            state.apm[1] = format_value(pm25)
+            state.apm[1] = format_value(pm2_5)
             state.apm[2] = format_value(pm10)
             
-            state.apm_aqi_buf["PM2_5"] = pm25
-            state.apm_aqi_buf["PM10"] = pm10
-            conc_to_aqi(state.apm_aqi_buf)
+            state.apm_aqi_buf[0] = format_value(conc_to_aqi(PM2_5, pm2_5))
+            state.apm_aqi_buf[1] = format_value(conc_to_aqi(PM10, pm10))
                     
             t = time.ticks_ms()
             state.last_apm_ts = t
@@ -542,7 +566,7 @@ async def wifi_mqtt_task(rtc, state, sd):
             # --- Try Wi-Fi if not connected ---
             if not state.wlan or not state.wlan.isconnected():
                 try:
-                    if config.debug:
+                    if debug:
                         print("WiFi: (re)connecting...")
                     wlan = await async_connect_wifi(WIFI_SSID, WIFI_PASS,
                                                     timeout=WIFI_CONNECT_TIMEOUT,
@@ -559,18 +583,21 @@ async def wifi_mqtt_task(rtc, state, sd):
                     sd.append_error("wifi_fail", str(e), ts=rtc_tup(rtc))
 
             # --- Try MQTT if Wi-Fi is OK and no client (blocking) ---
-            if state.wifi_ok and not state.mqtt_client:
+            if state.wifi_ok and not state.mqtt_ok:
                 try:
-                    if config.debug:
-                        print("MQTT: connecting...")
-                    state.mqtt_client = MQTTClientSimple(
-                        config.client_id,
-                        config.server,
-                        config.port,
-                        config.user,
-                        config.password,
-                        config.KEEP_ALIVE_INTERVAL,
-                    )
+                    if not state.mqtt_client:
+                        if debug:
+                            print("MQTT: connecting...")
+                        state.mqtt_client = MQTTClientSimple(
+                            config.client_id,
+                            config.server,
+                            config.port,
+                            config.user,
+                            config.password,
+                            config.KEEP_ALIVE_INTERVAL,
+                        )
+                    else:
+                        state.mqtt_client._connect()
                     state.mqtt_ok = True # connection successful, if reached here without any error
                     mqtt_fail_count = 0 # reset backoff state
                     state.heartbeat = time.ticks_ms()   # <<-- MQTT success heartbeat
@@ -652,10 +679,10 @@ def draw_lcd_page(rtc, lcd, state, page):
 
         # HEARTBEAT
         try:
-            hb = getattr(state, "heartbeat", None)
+            hb = state.heartbeat
             lcd.text("HB:", 0, 24)
             if hb:
-                age = time.ticks_diff(now_ticks, state.heartbeat) // 1000
+                age = time.ticks_diff(now_ticks, hb) // 1000
                 # if heartbeat younger than 120s show OK, else show seconds
                 if age <= 90:
                     lcd.text("OK", 24, 24)
@@ -734,19 +761,19 @@ def draw_lcd_page(rtc, lcd, state, page):
         owm_aqi = state.owm_aqi_buf
         
         lcd.text("i2.5", LABEL_OFFSET, 0)
-        lcd.text(_safe_val(apm_aqi["PM2_5"]), VALUE_OFFSET, 0)
+        lcd.text(_safe_val(apm_aqi[0]), VALUE_OFFSET, 0)
 
         lcd.text("i10 ", LABEL_OFFSET, 8)
-        lcd.text(_safe_val(apm_aqi["PM10"]), VALUE_OFFSET, 8)
+        lcd.text(_safe_val(apm_aqi[1]), VALUE_OFFSET, 8)
 
         lcd.text("o2.5", LABEL_OFFSET, 16)
-        lcd.text(_safe_val(owm_aqi["PM2_5"]), VALUE_OFFSET, 16)
+        lcd.text(_safe_val(owm_aqi[0]), VALUE_OFFSET, 16)
 
         lcd.text("o10 ", LABEL_OFFSET, 24)
-        lcd.text(_safe_val(owm_aqi["PM10"]), VALUE_OFFSET, 24)
+        lcd.text(_safe_val(owm_aqi[1]), VALUE_OFFSET, 24)
 
         lcd.text("oNO2", LABEL_OFFSET, 32)
-        lcd.text(_safe_val(owm_aqi["NO2"]), VALUE_OFFSET, 32)
+        lcd.text(_safe_val(owm_aqi[2]), VALUE_OFFSET, 32)
 
     # -------------------------
     # PAGE 5: MEMORY
@@ -763,89 +790,115 @@ def draw_lcd_page(rtc, lcd, state, page):
     lcd.show() # show ddram on screen
 
 
+# --- ISRs ---
+def button1_isr(pin):
+    """Interrupt handler for button 1 (NEXT)"""
+    state.button_pressed = 1
+    state.button_flag.set()   # IRQ-safe  # Wake up the LCD task (# ← "Ring the doorbell")
+
+def button2_isr(pin):
+    """Interrupt handler for button 2 (PREV)"""
+    state.button_pressed = 2
+    state.button_flag.set()   # IRQ-safe  # Wake up the LCD task (# ← "Ring the doorbell")
+    
+async def lcd_timeout_watcher(state, lcd):
+    """
+    Separate task that ONLY runs when LCD is on.
+    Watches for LCD timeout and turns off LCD.
+    """
+    timeout_ms = config.DISPLAY_TIMEOUT_MS # display timeout
+    
+    while True:
+        # Wait for signal that LCD was turned on
+        await state.timeout_event.wait() # ← Sleeps here until event is set
+        state.timeout_event.clear()
+        
+        # Now LCD is on, start watching for timeout
+        while state.lcd_on:
+            now_ticks = time.ticks_ms()
+            elapsed_ms = time.ticks_diff(now_ticks, state.last_lcd_press)            
+            remaining_ms = timeout_ms - elapsed_ms
+            
+            if remaining_ms <= 0:
+                # Timeout! Turn off LCD
+                lcd.clear()
+                lcd.power_off() # save power by switching the screen off
+                state.lcd_on = False
+                break # Exit the inner loop, go back to waiting
+            
+            # Sleep exactly until the timeout is supposed to happen.
+            # If a user presses a button during this sleep, 'state.last_lcd_press' 
+            # will update in the background. When we wake up, we will loop 
+            # again, recalculate 'remaining', see that we have more time, 
+            # and sleep again.
+            await asyncio.sleep_ms(remaining_ms)
+        
+        # LCD is now off, go back to waiting for next turn-on
+
 async def button_lcd_task(rtc, state, lcd, button1_pin, button2_pin):
     """
+    Event-driven LCD task - only wakes when button is pressed.
+    Much more efficient than polling.
     Two-button Prev/Next navigation for pages.
-    - button1_pin, button2_pin: machine.Pin objects (pull-ups; pressed == 0)
-    - DISPLAY_TIMEOUT: seconds to auto-off after last user action
-    - DEBOUNCE_MS: simple debounce window
-    - POLL_MS: main loop sleep
     """
-    poll_ms_active = config.POLL_MS_ACTIVE     # Fast polling when LCD is ON
-    poll_ms_idle = config.POLL_MS_IDLE    # Slow polling when LCD is OFF
-    display_timeout_ms = config.DISPLAY_TIMEOUT_MS  # milliseconds after last button press
+    
     debounce_ms = config.DEBOUNCE_MS
-    total_pages = config.TOTAL_PAGES # total number of pages
-    min_redraw_ms = config.MIN_REDRAW_MS
-
-    last_level1 = 1  # pull-up, 1 = not pressed
-    last_level2 = 1  # pull-up, 1 = not pressed
+    total_pages = config.TOTAL_PAGES
+    
+    # Setup interrupts
+    button1_pin.irq(trigger=machine.Pin.IRQ_FALLING, handler=button1_isr)
+    button2_pin.irq(trigger=machine.Pin.IRQ_FALLING, handler=button2_isr)
     
     # ---- turn LCD on at startup and show page 1 ----
     lcd.power_on() # switch on the screen
     draw_lcd_page(rtc, lcd, state, 1)   # show page 1 immediately
     state.lcd_on = True
     state.last_lcd_press = time.ticks_ms()
+    state.timeout_event.set()  # Signal timeout watcher that LCD is on
     # --------------------------------------
     
     while True:
-        level1 = button1_pin.value()  # 0 = pressed
-        level2 = button2_pin.value()
-
-        # NEXT button edge: just pressed
-        if level1 == 0 and last_level1 == 1:
+        try:
+            # Wait FOREVER for button press (no timeout!)
+            # This task literally sleeps until a button is pressed
+            await state.button_flag.wait() # ThreadSafeFlag Auto-clears automatically
+            
+            # Debouncing - ignore if pressed too soon after last press
             now = time.ticks_ms()
-            # debounce
-            await asyncio.sleep_ms(debounce_ms)
-            if button1_pin.value() == 0:
-                if time.ticks_diff(now, state.last_lcd_press) >= min_redraw_ms:
-                    state.last_lcd_press = now
+            if time.ticks_diff(now, state.last_lcd_press) < debounce_ms:
+                state.button_pressed = None
+                continue # Ignore this press
+            
+            state.last_lcd_press = now
 
-                    if not state.lcd_on:
-                        lcd.power_on() # switch on the screen
-                        state.lcd_on = True
-                        state.current_page = 1
-                    else:
-                        # advance page: 1->2->3->...->1
-                        state.current_page = 1 if state.current_page == total_pages else state.current_page + 1
-
-                    draw_lcd_page(rtc, lcd, state, state.current_page)
+            # Handle button press
+            if state.button_pressed == 1:  # NEXT button
+                if not state.lcd_on:
+                    lcd.power_on() # switch on the screen
+                    state.lcd_on = True
+                    state.current_page = 1
+                    state.timeout_event.set()  # Signal timeout watcher
+                else:
+                    state.current_page = 1 if state.current_page == total_pages else state.current_page + 1
                 
-        # PREV button edge: just pressed
-        elif level2 == 0 and last_level2 == 1:
-            now = time.ticks_ms()
-            # debounce
-            await asyncio.sleep_ms(debounce_ms)
-            if button2_pin.value() == 0:
-                if time.ticks_diff(now, state.last_lcd_press) >= min_redraw_ms:
-                    state.last_lcd_press = now
-
-                    if not state.lcd_on:
-                        lcd.power_on() # switch on the screen
-                        state.lcd_on = True
-                        state.current_page = 1
-                    else:
-                        # go back page: 1<-2<-3...<-1
-                        state.current_page = total_pages if state.current_page == 1 else state.current_page - 1
-
-                    draw_lcd_page(rtc, lcd, state, state.current_page)
-                
+            elif state.button_pressed == 2:  # PREV button
+                if not state.lcd_on:
+                    lcd.power_on() # switch on the screen
+                    state.lcd_on = True
+                    state.current_page = 1
+                    state.timeout_event.set()  # Signal timeout watcher
+                else:
+                    state.current_page = total_pages if state.current_page == 1 else state.current_page - 1
+            
+            draw_lcd_page(rtc, lcd, state, state.current_page)
+            state.button_pressed = None  # Clear the button state
         
-        # auto-off
-        if state.lcd_on and (time.ticks_diff(time.ticks_ms(), state.last_lcd_press) >= display_timeout_ms):
-            lcd.clear()            
-            lcd.power_off() # save power by switching the screen off
-            state.lcd_on = False
-
-        last_level1 = level1
-        last_level2 = level2
+        except Exception as e:
+            # Unexpected outer error — log, but keep loop alive
+            sd.append_error("button_lcd_task_error", str(e), ts=rtc_tup(rtc))
         
-        if state.lcd_on:
-            await asyncio.sleep_ms(poll_ms_active)   # 80ms - responsive when user is interacting
-        else:
-            await asyncio.sleep_ms(poll_ms_idle)     # 500ms - save power when idle
 
-
+    
 # --------------------------------------------------------------------
 # Watchdog
 # -------------------------------------------------------------------
@@ -893,9 +946,9 @@ async def watchdog_manager(rtc, state, sd, hard_wdt=None):
             if soft_check_counter >= soft_check_cycles:
                 soft_check_counter = 0
                 
-                last = getattr(state, "heartbeat", None)
+                last = state.heartbeat
                 if last is not None:
-                    age_ms = time.ticks_diff(time.ticks_ms(), state.heartbeat)
+                    age_ms = time.ticks_diff(time.ticks_ms(), last)
                     if age_ms > soft_wdt_timeout_ms:
                         # Soft watchdog triggered: log and reset (best-effort, minimal prints)
                         sd.append_error("watchdog_stale", "stale:%.0f, reboot" % (age_ms//1000), ts=rtc_tup(rtc), force=True)
@@ -967,10 +1020,10 @@ async def main():
             state.wifi_ok = True
             #rtc.sync_time_with_ntp()
             state.heartbeat = time.ticks_ms()   # <<-- mark initial good state
-            if config.debug:
+            if debug:
                 print("RTC synced with NTP")
     except Exception as e:
-        if config.debug:
+        if debug:
             print("Initial WiFi/NTP failed:", e)
            
     # set internal RTC from DS3231 so filesystem timestamps (metadata) are correct
@@ -1042,10 +1095,11 @@ async def main():
     asyncio.create_task(owm_task(rtc, state, owm_client, sd))
     if config.run_apm and apm_sensor:
         asyncio.create_task(apm10_task(rtc, state, apm_sensor, sd))
-    elif config.debug:
+    elif debug:
         print("APM10: not detected, skipping apm10_task") # task not created
     asyncio.create_task(sensor_and_log_task(rtc, state, sensors, sd))
     asyncio.create_task(button_lcd_task(rtc, state, lcd, button1, button2))
+    asyncio.create_task(lcd_timeout_watcher(state, lcd))
     if config.debug_mem:
         asyncio.create_task(health_log_task(rtc, state, sd))
 
