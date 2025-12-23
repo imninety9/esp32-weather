@@ -1,10 +1,9 @@
 # owm.py -- fetch OpenWeatherMap current weather (simple, cached)
 
 import urequests
-import config
 
 class OWMClient:
-    __slots__ = ("url", "url_aqi", "headers", "_cache")
+    __slots__ = ("url", "url_aqi", "headers", "_cache_weather", "_cache_aqi")
     
     def __init__(self, url, url_aqi, headers=None):
         self.url = url
@@ -26,9 +25,8 @@ class OWMClient:
                 self._cache_weather[2] = main.get('humidity') # humidity
                 self._cache_weather[3] = main.get('grnd_level') * 100 # pressure - Convert hPa to Pa [ground level pressure]
             del data
-        except Exception as e:
-            if config.debug:
-                print("Weather fetch failed:", e)
+        except Exception:
+            raise
         
         return self._cache_weather
 
@@ -45,9 +43,8 @@ class OWMClient:
                 self._cache_aqi[1] = comp.get('pm10') # conc: μg/m3
                 self._cache_aqi[2] = comp.get('no2') # conc: μg/m3
             del data
-        except Exception as e:
-            if config.debug:
-                print("AQI fetch failed:", e)
+        except Exception:
+            raise
         
         return self._cache_aqi
     
